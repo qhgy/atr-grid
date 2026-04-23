@@ -1,0 +1,24 @@
+[project]
+name = "a-stock-tools"
+version = "0.1.0"
+description = "Active A-share analysis and monitoring workflow."
+requires-python = ">=3.12"
+dependencies = [
+  "beautifulsoup4>=4.14.3",
+  "numpy",
+  "pandas",
+  "requests",
+]
+
+[project.scripts]
+atr-grid = "atr_grid.cli:main"
+
+[tool.pytest.ini_options]
+pythonpath = [
+  ".",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]

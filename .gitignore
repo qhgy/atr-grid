@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+*.egg-info/
+.DS_Store
+Thumbs.db
+*.token
+xq_token.txt
+*_cookies.txt
+xueqiu*.txt
+output/paper_logs/
+output/atr_grid_reports/
