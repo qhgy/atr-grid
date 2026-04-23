@@ -166,18 +166,18 @@ def _maybe_notify(plan, *, notify: bool, notify_always: bool) -> None:
 
 
 def _write_multi_html(plans: list) -> Path:
-    """Write a combined multi-ETF HTML dashboard to docs/index.html."""
+    """Write a combined multi-ETF HTML dashboard and a dated snapshot."""
     from .report import render_html, _load_paper_state  # local import to avoid circular
     from core.paths import project_path
 
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    today = datetime.now().strftime("%Y-%m-%d")
     sections = []
     summary_rows = []
 
     for plan in plans:
         paper = _load_paper_state(plan.symbol)
         single_html = render_html(plan, paper_state=paper)
-        # Extract body content from single HTML (between <body> tags)
         body_start = single_html.find("<body")
         body_end = single_html.rfind("</body>")
         if body_start != -1 and body_end != -1:
@@ -204,6 +204,30 @@ def _write_multi_html(plans: list) -> Path:
             f'{body_inner}'
             f'</div>'
         )
+
+    # Collect existing snapshots for the nav bar (scan output/snapshots/)
+    snap_dir = project_path("output", "snapshots")
+    snap_dir.mkdir(parents=True, exist_ok=True)
+    existing_dates = sorted(
+        [p.stem for p in snap_dir.glob("????-??-??.html") if p.stem != today],
+        reverse=True,
+    )[:30]  # keep last 30
+
+    # Build snapshot date picker
+    if existing_dates:
+        options = "".join(f'<option value="{d}">{d}</option>' for d in existing_dates)
+        snapshot_nav = f"""
+<div class="card" style="display:flex;align-items:center;gap:12px;padding:12px 20px">
+  <span style="color:#64748b;font-size:13px">📅 历史快照：</span>
+  <select id="snap-picker" onchange="window.location.href='snapshots/'+this.value+'.html'"
+    style="background:#0f172a;color:#94a3b8;border:1px solid #334155;border-radius:6px;padding:4px 8px;font-size:13px">
+    <option value="">— 选择日期 —</option>
+    {options}
+  </select>
+  <span style="color:#374151;font-size:11px;margin-left:auto">今日：{today}</span>
+</div>"""
+    else:
+        snapshot_nav = ""
 
     summary_table = f"""
 <div class="card">
@@ -241,13 +265,27 @@ def _write_multi_html(plans: list) -> Path:
 </style>
 </head>
 <body>
+{snapshot_nav}
 {summary_table}
 {"".join(sections)}
 <p style="color:#374151;font-size:11px;text-align:center;margin-top:24px">生成于 {now_str} · atr-grid</p>
 </body>
 </html>"""
 
+    # Write main dashboard
     out_path = project_path("output", "atr_grid.html")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(html, encoding="utf-8")
+
+    # Write dated snapshot (uses relative path for snapshot links — same dir)
+    snap_html = html.replace(
+        "href='snapshots/",
+        "href='../snapshots/",
+    ).replace(
+        "<title>ETF ATR 网格 · 多标的</title>",
+        f"<title>ETF ATR 网格 {today}</title>",
+    )
+    snap_path = snap_dir / f"{today}.html"
+    snap_path.write_text(snap_html, encoding="utf-8")
+
     return out_path

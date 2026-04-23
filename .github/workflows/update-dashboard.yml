@@ -2,8 +2,8 @@ name: Update ATR Grid Dashboard
 
 on:
   schedule:
-    # 15:30 Beijing time (UTC+8) on weekdays → 07:30 UTC
-    - cron: '30 7 * * 1-5'
+    # 09:00 Beijing time (UTC+8) on weekdays → 01:00 UTC
+    - cron: '0 1 * * 1-5'
   workflow_dispatch:
     inputs:
       symbols:
@@ -36,17 +36,23 @@ jobs:
           mkdir -p output
           uv run python -m atr_grid multi $SYMBOLS --notify
 
-      - name: Update docs/index.html
+      - name: Update docs/ (index + snapshot)
         run: |
-          mkdir -p docs
+          mkdir -p docs/snapshots
+          TODAY=$(date '+%Y-%m-%d')
           cp output/atr_grid.html docs/index.html
-          echo "Updated: $(date '+%Y-%m-%d %H:%M UTC')" >> docs/index.html
+          # Also copy any local snapshots generated
+          if [ -d output/snapshots ]; then
+            cp output/snapshots/*.html docs/snapshots/ 2>/dev/null || true
+          fi
+          # Always save today's snapshot from the Actions run
+          cp output/atr_grid.html "docs/snapshots/${TODAY}.html"
 
       - name: Commit and push if changed
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add docs/index.html
+          git add docs/
           git diff --staged --quiet || \
             git commit -m "chore: auto-update dashboard $(date '+%Y-%m-%d')" && \
             git push
