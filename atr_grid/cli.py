@@ -27,7 +27,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     plan_parser = subparsers.add_parser("plan", help="生成单个 ETF 的 ATR 网格计划")
     plan_parser.add_argument("symbol", help="ETF 代码，如 SH515880 或 515880")
-    plan_parser.add_argument("--shares", type=int, default=200, help="参考持仓股数")
+    plan_parser.add_argument("--shares", type=int, default=2000, help="参考持仓股数")
     plan_parser.add_argument("--json-out", help="JSON 输出文件路径")
     plan_parser.add_argument("--md-out", help="Markdown 输出文件路径")
     plan_parser.add_argument("--no-save", action="store_true", help="只打印结果，不自动保存默认报告")
@@ -37,11 +37,11 @@ def build_parser() -> argparse.ArgumentParser:
     replay_parser = subparsers.add_parser("replay", help="滚动回放最近 lookback 个交易日")
     replay_parser.add_argument("symbol", help="ETF 代码，如 SH515880 或 515880")
     replay_parser.add_argument("--lookback", type=int, default=60, help="回放交易日数量")
-    replay_parser.add_argument("--shares", type=int, default=200, help="参考持仓股数")
+    replay_parser.add_argument("--shares", type=int, default=2000, help="参考持仓股数")
 
     multi_parser = subparsers.add_parser("multi", help="生成多个 ETF 的汇总 Dashboard")
     multi_parser.add_argument("symbols", nargs="+", help="ETF 代码列表，空格分隔")
-    multi_parser.add_argument("--shares", type=int, default=200, help="参考持仓股数")
+    multi_parser.add_argument("--shares", type=int, default=2000, help="参考持仓股数")
     multi_parser.add_argument("--notify", action="store_true", help="有临近档位的标的推送通知")
     multi_parser.add_argument("--notify-always", action="store_true", help="推送所有标的的通知")
 

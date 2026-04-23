@@ -34,8 +34,8 @@ class GridConfig:
     grid_level_count: int = 3
 
     # -- position sizing --
-    reference_position_shares: int = 1000
-    reference_tranche_shares: int = 100
+    reference_position_shares: int = 2000
+    reference_tranche_shares: int = 200
     trim_ratio: float = 0.10   # trend_up: sell 10% as tactical lot
     tactical_ratio: float = 0.20  # range: use 20% as tactical lot
     lot_size: int = 100  # A-share minimum lot
