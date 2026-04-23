@@ -18,6 +18,7 @@ dependencies = [
     { name = "beautifulsoup4" },
     { name = "numpy" },
     { name = "pandas" },
+    { name = "pysnowball" },
     { name = "requests" },
 ]
 
@@ -31,6 +32,7 @@ requires-dist = [
     { name = "beautifulsoup4", specifier = ">=4.14.3" },
     { name = "numpy" },
     { name = "pandas" },
+    { name = "pysnowball", specifier = ">=0.1.8" },
     { name = "requests" },
 ]
 
@@ -297,6 +299,19 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/c3/b2/bc9c9196916376152d655522fdcebac55e66de6603a76a02bca1b6414f6c/pygments-2.20.0.tar.gz", hash = "sha256:6757cd03768053ff99f3039c1a36d6c0aa0b263438fcab17520b30a303a82b5f", size = 4955991, upload-time = "2026-03-29T13:29:33.898Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/f4/7e/a72dd26f3b0f4f2bf1dd8923c85f7ceb43172af56d63c7383eb62b332364/pygments-2.20.0-py3-none-any.whl", hash = "sha256:81a9e26dd42fd28a23a2d169d86d7ac03b46e2f8b59ed4698fb4785f946d0176", size = 1231151, upload-time = "2026-03-29T13:29:30.038Z" },
+]
+
+[[package]]
+name = "pysnowball"
+version = "0.1.8"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "beautifulsoup4" },
+    { name = "requests" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a0/bf/8af34d6bf7fed0be465d3964775272e6d5135a42386cec67582def9e9b46/pysnowball-0.1.8.tar.gz", hash = "sha256:9166448f5e8142b96a8004f7362eaafae0192e61bf8a042f6ac48f2c8f6a660a", size = 28496, upload-time = "2025-09-21T13:40:00.87Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ef/89/8b07f8714b60739575ff110e54085e32e0784e20f1bc412899e876fa8919/pysnowball-0.1.8-py3-none-any.whl", hash = "sha256:1073bdfb77636cbc598535602fa6778e031118aee4bd00a1354e2e000763e2fc", size = 16397, upload-time = "2025-09-21T13:39:58.568Z" },
 ]
 
 [[package]]

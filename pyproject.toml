@@ -7,6 +7,7 @@ dependencies = [
   "beautifulsoup4>=4.14.3",
   "numpy",
   "pandas",
+  "pysnowball>=0.1.8",
   "requests",
 ]
 
