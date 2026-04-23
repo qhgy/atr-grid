@@ -9,7 +9,7 @@ on:
       symbols:
         description: 'ETF symbols space-separated (e.g. SH515880 SH513500)'
         required: false
-        default: 'SH515880 SH513500'
+        default: 'SH515880 SH513500 SZ159915'
 
 permissions:
   contents: write
@@ -32,7 +32,7 @@ jobs:
           XUEQIUTOKEN: ${{ secrets.XUEQIUTOKEN }}
           SERVERCHAN_KEY: ${{ secrets.SERVERCHAN_KEY }}
         run: |
-          SYMBOLS="${{ github.event.inputs.symbols || 'SH515880 SH513500' }}"
+          SYMBOLS="${{ github.event.inputs.symbols || 'SH515880 SH513500 SZ159915' }}"
           mkdir -p output
           uv run python -m atr_grid multi $SYMBOLS --notify
 
