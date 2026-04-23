@@ -6,10 +6,10 @@ on:
     - cron: '30 7 * * 1-5'
   workflow_dispatch:
     inputs:
-      symbol:
-        description: 'ETF symbol (e.g. SH515880)'
+      symbols:
+        description: 'ETF symbols space-separated (e.g. SH515880 SH513500)'
         required: false
-        default: 'SH515880'
+        default: 'SH515880 SH513500'
 
 permissions:
   contents: write
@@ -27,13 +27,13 @@ jobs:
       - name: Install dependencies
         run: uv sync
 
-      - name: Generate ATR Grid plan
+      - name: Generate multi-ETF dashboard
         env:
           XUEQIUTOKEN: ${{ secrets.XUEQIUTOKEN }}
         run: |
-          SYMBOL="${{ github.event.inputs.symbol || 'SH515880' }}"
+          SYMBOLS="${{ github.event.inputs.symbols || 'SH515880 SH513500' }}"
           mkdir -p output
-          uv run python -m atr_grid plan "$SYMBOL" --no-save
+          uv run python -m atr_grid multi $SYMBOLS
 
       - name: Update docs/index.html
         run: |

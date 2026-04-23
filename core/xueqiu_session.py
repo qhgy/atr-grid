@@ -78,6 +78,8 @@ def _warn_if_expiring_soon(cookie_path: Path | None) -> None:
     if "# Netscape HTTP Cookie File" not in raw_text:
         return  # raw token file — no expiry info
 
+    _KEY_COOKIES = {"xq_a_token", "u"}  # only these matter for API auth
+
     earliest_expiry: int | None = None
     for line in raw_text.splitlines():
         line = line.strip()
@@ -88,6 +90,9 @@ def _warn_if_expiring_soon(cookie_path: Path | None) -> None:
             continue
         domain = parts[0]
         if "xueqiu.com" not in domain:
+            continue
+        name = parts[5]
+        if name not in _KEY_COOKIES:
             continue
         try:
             expiry_ts = int(parts[4])

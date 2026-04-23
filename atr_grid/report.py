@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import csv
 import json
+import sys
+import urllib.parse
+import urllib.request
 from datetime import datetime
 from pathlib import Path
+from typing import Sequence
 
 from core.paths import project_path
 
@@ -352,6 +356,68 @@ def _translate_data_source(value: str) -> str:
         "missing": "缺失",
     }
     return mapping.get(value, value)
+
+
+# ---------------------------------------------------------------------------
+# Notifications (Server酱 / sctapi.ftqq.com)
+# ---------------------------------------------------------------------------
+
+_NOTIFY_THRESHOLD_PCT = 1.5  # alert when price within 1.5% of any key level
+
+
+def should_notify(plan: GridPlan, threshold_pct: float = _NOTIFY_THRESHOLD_PCT) -> bool:
+    """Return True if the current price is within *threshold_pct* of any key level."""
+    price = plan.current_price
+    key_levels: list[float | None] = [
+        plan.primary_buy,
+        plan.primary_sell,
+        plan.lower_invalidation,
+        plan.upper_breakout,
+        *(plan.reference_sell_ladder or []),
+    ]
+    for level in key_levels:
+        if level and abs(price - level) / level * 100 <= threshold_pct:
+            return True
+    return False
+
+
+def build_notify_content(plan: GridPlan) -> tuple[str, str]:
+    """Build (title, markdown_body) for a Server酱 push notification."""
+    price = plan.current_price
+    action_short = plan.headline_action[:28]
+    title = f"[{plan.symbol}] ¥{price:.3f} — {action_short}"
+    buy_text = f"¥{plan.primary_buy:.3f}" if plan.primary_buy else "N/A"
+    sell_text = f"¥{plan.primary_sell:.3f}" if plan.primary_sell else "N/A"
+    regime = _translate_regime(plan.regime)
+    lines = [
+        f"## {plan.symbol}  |  {plan.last_trade_date}",
+        "",
+        f"**当前价**：¥{price:.3f}　**状态**：{regime}",
+        "",
+        f"**动作**：{plan.headline_action}",
+        f"**结论**：{plan.reason}",
+        "",
+        f"主买点：{buy_text}　主卖点：{sell_text}",
+        "",
+        "[查看最新 Dashboard](https://qhgy.github.io/atr-grid/)",
+    ]
+    return title, "\n".join(lines)
+
+
+def send_serverchan(key: str, title: str, content: str) -> bool:
+    """POST a push notification to Server酱 (sctapi.ftqq.com).
+
+    Returns True on success, False on any error.
+    """
+    url = f"https://sctapi.ftqq.com/{key}.send"
+    data = urllib.parse.urlencode({"title": title, "desp": content}).encode()
+    try:
+        with urllib.request.urlopen(url, data=data, timeout=8) as resp:
+            result = json.loads(resp.read().decode())
+            return result.get("data", {}).get("errno", -1) == 0
+    except Exception as exc:
+        print(f"[notify] Server酱推送失败: {exc}", file=sys.stderr)
+        return False
 
 
 # ---------------------------------------------------------------------------
