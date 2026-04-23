@@ -1,4 +1,4 @@
-# Sync atr_grid code + latest HTML to private GitHub repo nb95276/atr-grid
+# Sync atr_grid code + latest HTML to private GitHub repo qhgy/atr-grid
 # Usage: pwsh -File bin\sync-atr-grid.ps1 [-Message "optional commit message"]
 param([string]$Message = "")
 
@@ -49,9 +49,9 @@ $msg = if ($Message) { $Message } else { "sync: $stamp" }
 git commit -m "$msg`n`nCo-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>" 2>&1
 # Use gh token for push (avoids credential manager hang)
 $token = gh auth token 2>&1
-git remote set-url origin "https://nb95276:$token@github.com/nb95276/atr-grid.git"
+git remote set-url origin "https://nb95276:$token@github.com/qhgy/atr-grid.git"
 git push origin main 2>&1
-git remote set-url origin "https://github.com/nb95276/atr-grid.git"
+git remote set-url origin "https://github.com/qhgy/atr-grid.git"
 Pop-Location
 
-Write-Host "`nDone. https://github.com/nb95276/atr-grid"
+Write-Host "`nDone. https://github.com/qhgy/atr-grid"
