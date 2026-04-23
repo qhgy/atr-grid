@@ -30,10 +30,11 @@ jobs:
       - name: Generate multi-ETF dashboard
         env:
           XUEQIUTOKEN: ${{ secrets.XUEQIUTOKEN }}
+          SERVERCHAN_KEY: ${{ secrets.SERVERCHAN_KEY }}
         run: |
           SYMBOLS="${{ github.event.inputs.symbols || 'SH515880 SH513500' }}"
           mkdir -p output
-          uv run python -m atr_grid multi $SYMBOLS
+          uv run python -m atr_grid multi $SYMBOLS --notify
 
       - name: Update docs/index.html
         run: |
