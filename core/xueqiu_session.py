@@ -12,9 +12,8 @@ from core.paths import project_path, resolve_project_path
 XUEQIU_TOKEN_ENV_VAR = "XUEQIUTOKEN"
 XUEQIU_COOKIE_FILE_ENV_VAR = "XUEQIU_COOKIE_FILE"
 DEFAULT_COOKIE_FILES = ("xq_token.txt", "xueqiu.com_cookies.txt")
-_KNOWN_COOKIE_PATHS = (
-    r"D:\000000znb\1080\x1080x_attachments\xueqiu.com_cookies.txt",
-)
+# Extra fallback paths (machine-specific); set XUEQIU_COOKIE_FILE env var instead
+_KNOWN_COOKIE_PATHS: tuple[str, ...] = ()
 
 _EXPIRY_WARN_DAYS = 30   # 到期前 30 天开始提醒
 
