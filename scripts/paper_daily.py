@@ -90,6 +90,34 @@ def run_daily(
         frame, window=cfg.position_window
     ) if cfg.trend_hybrid_enabled else None
 
+    # Phase 5.2：对 primary_buy 做一次 cash_floor 预检，告诉用户"今天如果有买信号，地板会不会拦"。
+    # 这不改 engine 的 plan，只往 payload 里多写一个预警字段。
+    cash_floor_check: dict[str, Any] | None = None
+    if (
+        cfg.trend_hybrid_enabled
+        and plan.primary_buy is not None
+        and total_equity > 0
+    ):
+        tranche = cfg.reference_tranche_shares
+        # 保守估算：按 0.3% 滑点 + 佣金粗略（正式 commission 会更低，偏保守更安全）
+        intended = tranche * plan.primary_buy * 1.003
+        cash_before = max(0.0, total_equity - shares * plan.current_price)
+        decision = hybrid_mod.cash_floor_guard(
+            cash_before=cash_before,
+            intended_amount=intended,
+            total_equity=total_equity,
+            cfg=cfg,
+            emergency_unlocked=emergency,
+        )
+        approved_full = decision.approved_amount + 1e-6 >= intended
+        cash_floor_check = {
+            "would_block": not approved_full,
+            "intended_amount": round(intended, 2),
+            "approved_amount": round(decision.approved_amount, 2),
+            "cash_before_estimate": round(cash_before, 2),
+            "reason": decision.reason,
+        }
+
     return {
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "symbol": plan.symbol,
@@ -112,6 +140,7 @@ def run_daily(
         "position_percentile": percentile,
         "emergency_refill": emergency,
         "allocation": asdict(allocation) if allocation is not None else None,
+        "cash_floor_check": cash_floor_check,
     }
 
 
@@ -139,6 +168,17 @@ def format_text(payload: dict[str, Any]) -> str:
                 f"+ 网格层¥{alloc['swing_budget']:.0f} + 现金地板¥{alloc['cash_floor']:.0f}"
             )
         lines.append(f"应急补仓通道：{'已解锁' if payload['emergency_refill'] else '未触发'}")
+        cfc = payload.get("cash_floor_check")
+        if cfc is not None:
+            if cfc["would_block"]:
+                gap = cfc["intended_amount"] - cfc["approved_amount"]
+                lines.append(
+                    f"地板预警：⚠ 主买档会被拦（打算花￥{cfc['intended_amount']:.0f}，只放过￥{cfc['approved_amount']:.0f}，差￥{gap:.0f}）"
+                )
+            else:
+                lines.append(
+                    f"地板预警：✓ 主买档可过（打算花￥{cfc['intended_amount']:.0f}，现金估￥{cfc['cash_before_estimate']:.0f}）"
+                )
     lines.append("")
     lines.append(f"策略：{payload['strategy_name']}")
     lines.append(f"一句话：{payload['headline']}")
@@ -181,6 +221,13 @@ def format_markdown(payload: dict[str, Any]) -> str:
             f" + 网格¥{alloc['swing_budget']:.0f} + 地板¥{alloc['cash_floor']:.0f}"
         )
         lines.append(f"- 应急：`{'解锁' if payload['emergency_refill'] else '未触发'}`")
+        cfc = payload.get("cash_floor_check")
+        if cfc is not None:
+            if cfc["would_block"]:
+                gap = cfc["intended_amount"] - cfc["approved_amount"]
+                lines.append(f"- 地板预警：⚠ 拦截（缺￥{gap:.0f}）")
+            else:
+                lines.append("- 地板预警：✓ 可买")
     lines.append("")
     lines.append(f"**{payload['strategy_name']}**\n")
     lines.append(f"> {payload['headline']}")
