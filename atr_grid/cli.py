@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 
+from .backtest import run_backtest
+from .config import DEFAULT_CONFIG, for_profile
 from .engine import generate_plan, replay_symbol
 from .fund_eastmoney import fetch_fund_meta
 from .report import (
@@ -48,6 +51,22 @@ def build_parser() -> argparse.ArgumentParser:
     multi_parser.add_argument("--notify", action="store_true", help="有临近档位的标的推送通知")
     multi_parser.add_argument("--notify-always", action="store_true", help="推送所有标的的通知")
 
+    backtest_parser = subparsers.add_parser("backtest", help="walk-forward 回测 + KPI")
+    backtest_parser.add_argument("symbol", help="ETF 代码，如 SH515880 或 515880")
+    backtest_parser.add_argument(
+        "--profile",
+        default="default",
+        choices=["default", "stable", "dev", "aggressive"],
+        help="参数 profile，默认 default",
+    )
+    backtest_parser.add_argument("--kline-count", type=int, default=900, help="拉取 K 线根数，默认 900")
+    backtest_parser.add_argument("--warmup-bars", type=int, default=60, help="预热根数，默认 60")
+    backtest_parser.add_argument("--initial-cash", type=float, default=100_000.0, help="初始现金")
+    backtest_parser.add_argument("--initial-shares", type=int, default=2000, help="初始持股数")
+    backtest_parser.add_argument("--trade-shares", type=int, default=200, help="每次交易单位股数")
+    backtest_parser.add_argument("--json-out", help="JSON 输出路径")
+    backtest_parser.add_argument("--no-save", action="store_true", help="只打印不写 JSON")
+
     return parser
 
 
@@ -87,6 +106,29 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Multi-ETF HTML 已写出: {html_target}")
             for p in plans:
                 _maybe_notify(p, notify=args.notify, notify_always=args.notify_always)
+        return 0
+
+    if args.command == "backtest":
+        cfg = for_profile(args.profile) if args.profile != "default" else DEFAULT_CONFIG
+        result = run_backtest(
+            symbol=args.symbol,
+            cfg=cfg,
+            profile_name=args.profile,
+            initial_cash=args.initial_cash,
+            initial_shares=args.initial_shares,
+            trade_shares=args.trade_shares,
+            warmup_bars=args.warmup_bars,
+            kline_count=args.kline_count,
+        )
+        print(_backtest_summary(result))
+        if not args.no_save:
+            json_target = Path(args.json_out) if args.json_out else _default_backtest_json_path(result)
+            json_target.parent.mkdir(parents=True, exist_ok=True)
+            json_target.write_text(
+                json.dumps(_backtest_result_to_dict(result), ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            print(f"JSON 已写出: {json_target}")
         return 0
 
     replay = replay_symbol(args.symbol, lookback=args.lookback, shares=args.shares)
@@ -170,6 +212,89 @@ def _replay_summary(replay: dict) -> str:
             f"下沿失效: {replay['invalidations']} | 上沿突破: {replay['breakouts']}",
         ]
     )
+
+
+def _backtest_summary(r) -> str:
+    """格式化 BacktestResult 为人类可读的 KPI 块。"""
+    payoff = f"{r.payoff_ratio:.2f}" if r.payoff_ratio != float("inf") else "inf"
+    pf = f"{r.profit_factor:.2f}" if r.profit_factor != float("inf") else "inf"
+    lines = [
+        f"[{r.symbol}] ATR 网格 walk-forward 回测 (profile={r.profile})",
+        f"窗口: {r.start_date} → {r.end_date} | bars={r.bars}",
+        f"初始: cash=¥{r.initial_cash:.2f} shares={r.initial_shares} price=¥{r.initial_price:.3f}",
+        f"结末: cash=¥{r.final_cash:.2f} shares={r.final_shares} price=¥{r.final_price:.3f} equity=¥{r.final_equity:.2f}",
+        f"-- KPI --",
+        f"交易: total={r.trade_count} buy={r.buy_count} sell={r.sell_count} round_trips={r.round_trip_count} (win={r.win_count} loss={r.loss_count})",
+        f"胜率: {r.win_rate * 100:.2f}% | 赔率(payoff): {payoff} | profit_factor: {pf}",
+        f"均赢: ¥{r.avg_win:.2f} | 均输: ¥{r.avg_loss:.2f}",
+        f"总收益: {r.total_return_pct:+.2f}% | benchmark: {r.benchmark_return_pct:+.2f}% | excess: {r.excess_return_pct:+.2f}%",
+        f"MDD: {r.max_drawdown_pct:.2f}% | Sharpe: {r.sharpe_ratio:.3f}",
+        f"events: {r.events_summary}",
+    ]
+    if r.warnings:
+        lines.append(f"警告: {r.warnings}")
+    return "\n".join(lines)
+
+
+def _backtest_result_to_dict(r) -> dict:
+    """把 BacktestResult 序列化为 JSON-ready dict，处理 inf 不可 JSON 的值。"""
+    def safe(x):
+        return "inf" if x == float("inf") else x
+    return {
+        "symbol": r.symbol,
+        "profile": r.profile,
+        "start_date": r.start_date,
+        "end_date": r.end_date,
+        "bars": r.bars,
+        "initial_cash": r.initial_cash,
+        "initial_shares": r.initial_shares,
+        "initial_price": r.initial_price,
+        "final_cash": r.final_cash,
+        "final_shares": r.final_shares,
+        "final_price": r.final_price,
+        "final_equity": r.final_equity,
+        "benchmark_equity": r.benchmark_equity,
+        "total_return_pct": r.total_return_pct,
+        "benchmark_return_pct": r.benchmark_return_pct,
+        "excess_return_pct": r.excess_return_pct,
+        "trade_count": r.trade_count,
+        "buy_count": r.buy_count,
+        "sell_count": r.sell_count,
+        "round_trip_count": r.round_trip_count,
+        "win_count": r.win_count,
+        "loss_count": r.loss_count,
+        "win_rate": r.win_rate,
+        "avg_win": r.avg_win,
+        "avg_loss": r.avg_loss,
+        "payoff_ratio": safe(r.payoff_ratio),
+        "profit_factor": safe(r.profit_factor),
+        "max_drawdown_pct": r.max_drawdown_pct,
+        "sharpe_ratio": r.sharpe_ratio,
+        "events_summary": r.events_summary,
+        "trades": r.trades,
+        "round_trips": [
+            {
+                "buy_date": rt.buy_date,
+                "buy_price": rt.buy_price,
+                "sell_date": rt.sell_date,
+                "sell_price": rt.sell_price,
+                "shares": rt.shares,
+                "gross_pnl": rt.gross_pnl,
+                "fees": rt.fees,
+                "net_pnl": rt.net_pnl,
+                "return_pct": rt.return_pct,
+            }
+            for rt in r.round_trips
+        ],
+        "equity_curve": r.equity_curve,
+        "warnings": r.warnings,
+    }
+
+
+def _default_backtest_json_path(r) -> Path:
+    """默认 JSON 路径: output/backtest/{symbol}_{profile}_{end_date}.json"""
+    safe_date = (r.end_date or "unknown").replace("-", "")
+    return Path("output") / "backtest" / f"{r.symbol}_{r.profile}_{safe_date}.json"
 
 
 def _resolve_output_paths(plan, json_out: str | None, md_out: str | None, no_save: bool) -> tuple[Path | None, Path | None]:
