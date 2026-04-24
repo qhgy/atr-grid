@@ -31,7 +31,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -158,14 +158,62 @@ def _resolve_levels(plan: Any) -> tuple[list[float], list[float]]:
     return sell_levels, buy_levels
 
 
-def _simulate_fills(p: Portfolio, plan: Any) -> list[dict[str, Any]]:
-    """根据上次 vs 本次 current_price 的跨越判断是否触发成交。
+# ===== Pure-function core (Phase 1.2) =======================================
+#
+# `simulate_day` 是整个成交决策的纯函数化内核：
+#   输入 (PaperState, plan)  →  输出 (new_state, events)
+#
+# 不触网络、不读写文件、不读时钟。相同输入必然给相同输出。
+# 供 `_simulate_fills` (paper run) 和即将到来的 backtest 引擎 (Phase 1.3) 共用。
+#
+# 行为完全等价于抽取前的 `_simulate_fills`，包括：
+#   - regime=trend_down / disabled / baseline 的早退
+#   - 成本止损 (stop_price) 跌破冻结
+#   - 失效下沿 (lower_invalidation) 停买不停卖
+#   - 向上跨档卖一档 / 向下跨档买一档
+#   - 现金不足时买单中止
+#   - hold 语义（没跨档 或 只在失效区间）
 
-    成交规则按 regime 分流：
-    - trend_down → 完全不动（不接飞刀，不恐慌减仓）
-    - disabled  → 完全不动（数据异常）
-    - range / trend_up → 都允许双向，价位来自 _resolve_levels
-    - invalidation 触发 → 仅停买，不停卖
+
+@dataclass(frozen=True, slots=True)
+class PaperState:
+    """虚拟盘的可变量状态（用于纯函数 simulate_day）。
+
+    注意：这是不可变 dataclass——simulate_day 通过 `dataclasses.replace` 生成新对象，
+    不修改原 state。`Portfolio` 仍是可变容器（负责持久化和 CLI 展示），
+    两者互相转换由 _simulate_fills 完成。
+    """
+
+    shares: int
+    cash: float
+    last_price: float | None = None
+    trades_count: int = 0
+    stop_price: float | None = None
+    frozen: bool = False
+    frozen_at: str | None = None
+    frozen_price: float | None = None
+
+
+def simulate_day(
+    state: PaperState,
+    plan: Any,
+    *,
+    trade_shares: int = DEFAULT_TRADE_SHARES,
+) -> tuple[PaperState, list[dict[str, Any]]]:
+    """根据上次 vs 本次 current_price 的跨越，决定当日虚拟成交。
+
+    这是 paper 模块和 backtest 引擎的共享内核。纯函数：不触 IO、不读时钟。
+
+    Args:
+        state:        当前虚拟盘状态（不会被修改）。
+        plan:         engine.generate_plan 生成的 GridPlan（或 duck-typed 等价物）。
+                      仅读取：current_price / regime / reason / lower_invalidation /
+                      sell_levels / buy_levels / reference_sell_ladder /
+                      reference_rebuy_ladder / last_trade_date。
+        trade_shares: 每档成交股数，默认 200。
+
+    Returns:
+        (new_state, events)
     """
     events: list[dict[str, Any]] = []
     current = float(plan.current_price)
@@ -179,31 +227,37 @@ def _simulate_fills(p: Portfolio, plan: Any) -> list[dict[str, Any]]:
             "reason": plan.reason,
             "note": "下跌趋势期间持有不动，等市场结构修复",
         })
-        return events
+        return state, events
 
     # 2. 数据异常：不动
     if regime == "disabled":
         events.append({"type": "disabled", "reason": plan.reason})
-        return events
+        return state, events
 
     sell_levels, buy_levels = _resolve_levels(plan)
 
-    if p.last_price is None:
+    if state.last_price is None:
         events.append({"type": "baseline", "price": current, "note": "首日基线，不触发成交"})
-        return events
+        return state, events
 
-    prev = p.last_price
+    prev = state.last_price
+    shares = state.shares
+    cash = state.cash
+    trades_count = state.trades_count
+    frozen = state.frozen
+    frozen_at = state.frozen_at
+    frozen_price = state.frozen_price
 
     # 2.5 成本止损：跌破即冻结买入（仍允许触发卖出）
-    if p.stop_price is not None and current < p.stop_price and not p.frozen:
-        p.frozen = True
-        p.frozen_at = plan.last_trade_date
-        p.frozen_price = current
+    if state.stop_price is not None and current < state.stop_price and not frozen:
+        frozen = True
+        frozen_at = plan.last_trade_date
+        frozen_price = current
         events.append({
             "type": "stop_loss_trigger",
             "current": current,
-            "stop_price": p.stop_price,
-            "note": f"跌破成本止损 ¥{p.stop_price:.3f}，冻结接回；resume 命令可解冻",
+            "stop_price": state.stop_price,
+            "note": f"跌破成本止损 ¥{state.stop_price:.3f}，冻结接回；resume 命令可解冻",
         })
 
     # 3. 失效下沿警示（不阻止本日卖出，但停止接回）
@@ -219,13 +273,12 @@ def _simulate_fills(p: Portfolio, plan: Any) -> list[dict[str, Any]]:
 
     # 4. 向上跨越某档卖点 → 卖 1 tranche
     for lvl in sorted([x for x in sell_levels if x is not None]):
-        trade_shares = _trade_shares()
-        if prev < lvl <= current and p.shares >= trade_shares:
+        if prev < lvl <= current and shares >= trade_shares:
             amount = trade_shares * lvl
             fee = commission(amount)
-            p.shares -= trade_shares
-            p.cash += amount - fee
-            p.trades_count += 1
+            shares -= trade_shares
+            cash += amount - fee
+            trades_count += 1
             events.append({
                 "type": "sell",
                 "price": lvl,
@@ -238,17 +291,16 @@ def _simulate_fills(p: Portfolio, plan: Any) -> list[dict[str, Any]]:
             break  # 一天只卖一档
 
     # 5. 向下跨越某档买点 → 买 1 tranche（仅在 invalidation 未触发 且 未止损冻结时）
-    if not invalidated and not p.frozen:
+    if not invalidated and not frozen:
         for lvl in sorted([x for x in buy_levels if x is not None], reverse=True):
             if prev > lvl >= current:
-                trade_shares = _trade_shares()
                 amount = trade_shares * lvl
                 fee = commission(amount)
-                if p.cash < amount + fee:
+                if cash < amount + fee:
                     break
-                p.shares += trade_shares
-                p.cash -= amount + fee
-                p.trades_count += 1
+                shares += trade_shares
+                cash -= amount + fee
+                trades_count += 1
                 events.append({
                     "type": "buy",
                     "price": lvl,
@@ -266,6 +318,48 @@ def _simulate_fills(p: Portfolio, plan: Any) -> list[dict[str, Any]]:
         events.append({"type": "hold", "price": current, "note": "未跨越任何价位"})
     elif not has_action and all(e["type"] == "invalidation" for e in events):
         events.append({"type": "hold", "price": current, "note": "失效区间内，未跨越卖点"})
+
+    new_state = replace(
+        state,
+        shares=shares,
+        cash=cash,
+        trades_count=trades_count,
+        frozen=frozen,
+        frozen_at=frozen_at,
+        frozen_price=frozen_price,
+    )
+    return new_state, events
+
+
+def _simulate_fills(p: Portfolio, plan: Any) -> list[dict[str, Any]]:
+    """根据上次 vs 本次 current_price 的跨越判断是否触发成交。
+
+    成交规则按 regime 分流：
+    - trend_down → 完全不动（不接飞刀，不恐慌减仓）
+    - disabled  → 完全不动（数据异常）
+    - range / trend_up → 都允许双向，价位来自 _resolve_levels
+    - invalidation 触发 → 仅停买，不停卖
+
+    内部委托给纯函数 `simulate_day`（Phase 1.2 抽取），再把新状态回写到 Portfolio。
+    """
+    state = PaperState(
+        shares=p.shares,
+        cash=p.cash,
+        last_price=p.last_price,
+        trades_count=p.trades_count,
+        stop_price=p.stop_price,
+        frozen=p.frozen,
+        frozen_at=p.frozen_at,
+        frozen_price=p.frozen_price,
+    )
+    new_state, events = simulate_day(state, plan, trade_shares=_trade_shares())
+    # 回写可变字段（last_price/stop_price 由外部 cmd_run 负责）
+    p.shares = new_state.shares
+    p.cash = new_state.cash
+    p.trades_count = new_state.trades_count
+    p.frozen = new_state.frozen
+    p.frozen_at = new_state.frozen_at
+    p.frozen_price = new_state.frozen_price
     return events
 
 
