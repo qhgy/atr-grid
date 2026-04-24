@@ -77,6 +77,8 @@ DEFAULT_CONFIG = GridConfig()
 # stable     · 与 main 分支行为一致，用作回测基线。
 # dev        · 激进一点：regime 阈值收紧、预警距加百分比保底、step 加 0.8% 下限。
 # aggressive · dev 基础上更敏感，用于 A/B 边界测试。
+# balanced   · Phase 2.2：trade_shares=300。收益与 MDD 均衡（~8.8% excess / ~2% MDD）。
+# yield      · Phase 2.2：trade_shares=400 + step_max=1/4。高胜率高 PF（~71% / PF ~20）。
 _PROFILES: dict[str, dict[str, float | int]] = {
     "stable": {},
     "dev": {
@@ -95,6 +97,13 @@ _PROFILES: dict[str, dict[str, float | int]] = {
         "notify_threshold_pct": 0.8,
         "min_step_pct": 0.010,
         "grid_level_count": 4,
+    },
+    "balanced": {
+        "reference_tranche_shares": 300,
+    },
+    "yield": {
+        "reference_tranche_shares": 400,
+        "step_max_fraction": 1 / 4,
     },
 }
 

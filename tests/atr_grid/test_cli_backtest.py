@@ -98,7 +98,8 @@ def test_backtest_cli_prints_kpi_and_writes_json(tmp_path, monkeypatch, capsys):
     assert captured_kwargs["warmup_bars"] == 60
     assert captured_kwargs["initial_cash"] == 100_000.0
     assert captured_kwargs["initial_shares"] == 2000
-    assert captured_kwargs["trade_shares"] == 200
+    # Phase 2.2：CLI 默认不传 --trade-shares 时透传 None，run_backtest 内部从 cfg 兑底。
+    assert captured_kwargs["trade_shares"] is None
 
     out = capsys.readouterr().out
     assert "[SH515880]" in out

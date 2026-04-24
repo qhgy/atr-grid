@@ -100,7 +100,7 @@ def run_backtest(
     profile_name: str = "default",
     initial_shares: int = 0,
     initial_cash: float = 100_000.0,
-    trade_shares: int = DEFAULT_TRADE_SHARES,
+    trade_shares: int | None = None,
     warmup_bars: int = 60,
     kline_count: int | None = None,
     stop_pct: float | None = None,
@@ -124,6 +124,10 @@ def run_backtest(
 
     详见模块 docstring。
     """
+    # Phase 2.2：trade_shares 默认从 cfg.reference_tranche_shares 兑底（profile 生效）。
+    effective_trade_shares = (
+        trade_shares if trade_shares is not None else cfg.reference_tranche_shares
+    )
     if rows is None:
         if not symbol:
             raise ValueError("Either `rows` or `symbol` must be provided")
@@ -195,7 +199,7 @@ def run_backtest(
         )
         plan = _assemble_plan(history_ctx, snap, reg, cfg)
 
-        state, events = simulate_day(state, plan, trade_shares=trade_shares)
+        state, events = simulate_day(state, plan, trade_shares=effective_trade_shares)
         # 与 cmd_run 对齐: last_price 在 simulate_day 后执行更新
         state = replace(state, last_price=close)
 
@@ -218,7 +222,7 @@ def run_backtest(
             if chand_line is None or trailing > chand_line:
                 chand_line = trailing
             if chand_line is not None and close < chand_line:
-                exit_shares = min(state.shares, trade_shares)
+                exit_shares = min(state.shares, effective_trade_shares)
                 if exit_shares > 0:
                     proceeds = close * exit_shares
                     fee = commission(proceeds)

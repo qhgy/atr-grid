@@ -63,7 +63,12 @@ def build_parser() -> argparse.ArgumentParser:
     backtest_parser.add_argument("--warmup-bars", type=int, default=60, help="预热根数，默认 60")
     backtest_parser.add_argument("--initial-cash", type=float, default=100_000.0, help="初始现金")
     backtest_parser.add_argument("--initial-shares", type=int, default=2000, help="初始持股数")
-    backtest_parser.add_argument("--trade-shares", type=int, default=200, help="每次交易单位股数")
+    backtest_parser.add_argument(
+        "--trade-shares",
+        type=int,
+        default=None,
+        help="每次交易单位股数；不传时从 profile (cfg.reference_tranche_shares) 兑底，默认 200",
+    )
     backtest_parser.add_argument("--json-out", help="JSON 输出路径")
     backtest_parser.add_argument("--no-save", action="store_true", help="只打印不写 JSON")
 
