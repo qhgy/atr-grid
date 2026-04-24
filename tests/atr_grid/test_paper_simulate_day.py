@@ -175,3 +175,98 @@ def test_state_immutability_original_unchanged():
     assert state.shares == 2000                          # 原 state 未被 mutate
     assert state.cash == 10_000.0
     assert new_state.shares == 1800                      # 新 state 是独立对象
+
+
+# ------------------------------------------------------------ Phase 5.1：底仓保护
+def test_base_shares_lock_allows_sell_until_floor():
+    """base_shares=800 时，股数 1000 可卖 200 卒好碰到底仓线。"""
+    state = PaperState(shares=1000, cash=0.0, last_price=1.30, base_shares=800)
+    plan = FakePlan(current_price=1.36, regime="range",
+                    sell_levels=[1.35], buy_levels=[])
+    new_state, events = simulate_day(state, plan, trade_shares=200)
+    sells = [e for e in events if e["type"] == "sell"]
+    assert len(sells) == 1                     # 边界条件——卖完正好等于底仓，允许
+    assert new_state.shares == 800
+    assert new_state.base_shares == 800        # replace 自动保留
+
+
+def test_base_shares_lock_blocks_sell_through_floor():
+    """shares 已等于 base_shares 时，再有卖档不能再卖（否则会砍破底仓）。"""
+    state = PaperState(shares=800, cash=0.0, last_price=1.35, base_shares=800)
+    plan = FakePlan(current_price=1.41, regime="range",
+                    sell_levels=[1.40], buy_levels=[])
+    new_state, events = simulate_day(state, plan, trade_shares=200)
+    sells = [e for e in events if e["type"] == "sell"]
+    assert sells == []                         # 底仓保护：不卖
+    assert new_state.shares == 800             # 持仓不动
+    assert new_state.trades_count == 0
+
+
+def test_base_shares_zero_equivalent_to_legacy_behavior():
+    """base_shares=0（默认）时，卖单条件 shares-trade >= 0 等价旧版 shares >= trade。
+
+    shares=200, base_shares=0 → 可卖穿到 0。保障非 hybrid profile 行为不变。
+    """
+    state = PaperState(shares=200, cash=0.0, last_price=1.30)  # base_shares 缺省 = 0
+    plan = FakePlan(current_price=1.36, regime="range",
+                    sell_levels=[1.35], buy_levels=[])
+    new_state, events = simulate_day(state, plan, trade_shares=200)
+    sells = [e for e in events if e["type"] == "sell"]
+    assert len(sells) == 1                     # 老行为：能卖到完
+    assert new_state.shares == 0
+    assert new_state.base_shares == 0
+
+
+# ------------------------------------------------------------ Phase 5.2：现金地板 + 应急解锁
+def test_cash_floor_blocks_buy_when_cash_below_floor():
+    """cash_floor_ratio=1.0 → 地板=总权益 → spendable=0 → 任何买单被拒。"""
+    from atr_grid.config import GridConfig
+    cfg = GridConfig(cash_floor_ratio=1.0)
+    state = PaperState(shares=0, cash=50.0, last_price=1.00)
+    plan = FakePlan(current_price=0.94, regime="range",
+                    sell_levels=[], buy_levels=[0.95])
+    new_state, events = simulate_day(
+        state, plan, trade_shares=30,
+        cash_floor=50.0, total_equity=50.0, cfg=cfg,
+        emergency_unlocked=False,
+    )
+    types = [e["type"] for e in events]
+    assert "buy" not in types
+    assert "cash_floor_block" in types
+    assert new_state.shares == 0
+    assert new_state.cash == pytest.approx(50.0)
+    assert new_state.trades_count == 0
+
+
+def test_cash_floor_emergency_unlocked_allows_buy():
+    """emergency_unlocked=True + use_ratio=1.0 → 地板完全解锁 → 买单放行。"""
+    from atr_grid.config import GridConfig
+    cfg = GridConfig(cash_floor_ratio=1.0, emergency_refill_use_ratio=1.0)
+    state = PaperState(shares=0, cash=50.0, last_price=1.00)
+    plan = FakePlan(current_price=0.94, regime="range",
+                    sell_levels=[], buy_levels=[0.95])
+    new_state, events = simulate_day(
+        state, plan, trade_shares=30,
+        cash_floor=50.0, total_equity=50.0, cfg=cfg,
+        emergency_unlocked=True,
+    )
+    types = [e["type"] for e in events]
+    assert "buy" in types
+    assert "cash_floor_block" not in types
+    assert new_state.shares == 30
+    assert new_state.trades_count == 1
+
+
+def test_cash_floor_not_engaged_when_kwargs_default():
+    """kwargs 不传时（cash_floor=0 / cfg=None）买单完全走老路径，行为不变。
+
+    这条保证 live paper_daily.py 和单体测试在不启用 hybrid 时完全无感知。
+    """
+    state = PaperState(shares=0, cash=50.0, last_price=1.00)
+    plan = FakePlan(current_price=0.94, regime="range",
+                    sell_levels=[], buy_levels=[0.95])
+    new_state, events = simulate_day(state, plan, trade_shares=30)
+    types = [e["type"] for e in events]
+    assert "buy" in types
+    assert "cash_floor_block" not in types
+    assert new_state.shares == 30

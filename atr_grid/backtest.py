@@ -20,10 +20,11 @@ from typing import Any
 
 from .config import DEFAULT_CONFIG, GridConfig
 from .data import MarketContext, load_market_context
-from .engine import _assemble_plan
+from .engine import _assemble_plan, apply_hybrid_overlay
 from .indicators import build_indicator_frame, latest_snapshot
 from .paper import DEFAULT_TRADE_SHARES, PaperState, commission, simulate_day
 from .regime import classify_regime
+from . import hybrid as _hybrid_mod
 
 
 # ---------------------------------------------------------------- dataclasses
@@ -162,11 +163,15 @@ def run_backtest(
     initial_price = float(rows[start_index]["close"])
     initial_equity = initial_cash + initial_shares * initial_price
     initial_stop = (initial_price * (1.0 - stop_pct)) if stop_pct is not None else None
+    # Phase 5.1: 启用 hybrid 时，把 initial_shares 作为底仓线。非 hybrid profile 底仓线=0（行为不变）。
+    hybrid_on = getattr(cfg, "trend_hybrid_enabled", False)
+    base_shares_lock = initial_shares if hybrid_on else 0
     state = PaperState(
         shares=initial_shares,
         cash=initial_cash,
         last_price=None,
         stop_price=initial_stop,
+        base_shares=base_shares_lock,
     )
 
     trades_log: list[dict] = []
@@ -198,8 +203,29 @@ def run_backtest(
             fund_meta=None,
         )
         plan = _assemble_plan(history_ctx, snap, reg, cfg)
+        # Phase 5.1: hybrid overlay——非 hybrid profile 时 apply_hybrid_overlay 返回原 plan。
+        # 高档自动清 buy 侧，低/中档 plan 不变。total_equity 用收盘前的即时权益。
+        total_equity_today = state.cash + state.shares * close
+        plan, _alloc = apply_hybrid_overlay(
+            plan, sub_frame, total_equity=total_equity_today, cfg=cfg
+        )
 
-        state, events = simulate_day(state, plan, trade_shares=effective_trade_shares)
+        # Phase 5.2: cash_floor + 应急解锁。非 hybrid 时 cash_floor=0 → simulate_day 内部走老逻辑。
+        if hybrid_on:
+            cash_floor_value = total_equity_today * getattr(cfg, "cash_floor_ratio", 0.0)
+            emergency_unlocked = _hybrid_mod.should_emergency_refill(sub_frame, cfg)
+        else:
+            cash_floor_value = 0.0
+            emergency_unlocked = False
+        state, events = simulate_day(
+            state,
+            plan,
+            trade_shares=effective_trade_shares,
+            cash_floor=cash_floor_value,
+            total_equity=total_equity_today,
+            cfg=cfg,
+            emergency_unlocked=emergency_unlocked,
+        )
         # 与 cmd_run 对齐: last_price 在 simulate_day 后执行更新
         state = replace(state, last_price=close)
 

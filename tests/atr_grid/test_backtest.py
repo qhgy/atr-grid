@@ -215,3 +215,97 @@ def test_run_backtest_raises_when_not_enough_bars():
 def test_run_backtest_requires_rows_or_symbol():
     with pytest.raises(ValueError):
         run_backtest()
+
+
+# ---------------------------------------------------------------- Phase 5.1：hybrid overlay 接入回测
+
+def test_trend_hybrid_profile_locks_base_shares_in_uptrend():
+    """Phase 5.1 核心保险丝：
+
+    trend_hybrid profile 下，run_backtest 把 initial_shares 作为底仓线足计入。
+    单边上涨行情 + hybrid high 档 only_sell 原本会把持仓卖穿，接入后 final_shares
+    不会低于 initial_shares。
+    """
+    from atr_grid.config import for_profile
+
+    rows = _trending_rows(n=200, start=1.00, drift_per_day=0.005)
+    cfg = for_profile("trend_hybrid")
+    result = run_backtest(
+        rows=rows,
+        symbol="TEST_HYBRID_LOCK",
+        cfg=cfg,
+        profile_name="trend_hybrid",
+        initial_cash=10_000.0,
+        initial_shares=1000,
+        warmup_bars=60,
+    )
+    # 底仓线 1000 被锁——final_shares 必然 >= 1000
+    assert result.final_shares >= 1000, (
+        f"hybrid 底仓应被锁住为 1000，实际 final_shares={result.final_shares}"
+    )
+
+
+def test_non_hybrid_profile_backtest_results_unchanged():
+    """非 hybrid profile 下 apply_hybrid_overlay 透明返回，回测行为和 Phase 5 之前等价。
+
+    用震荡市纯网格跑一趟，断言买卖均产生 + trade_count > 0。
+    """
+    rows = _sinusoidal_rows(n=200, center=1.30, amp=0.10, period=20)
+    result = run_backtest(
+        rows=rows,
+        symbol="TEST_STABLE_UNCHANGED",
+        initial_cash=100_000.0,
+        initial_shares=2000,
+        trade_shares=200,
+        warmup_bars=60,
+    )
+    assert result.trade_count > 0
+    assert result.buy_count > 0
+    assert result.sell_count > 0
+
+
+# ---------------------------------------------------------------- Phase 5.1：hybrid overlay 接入回测
+
+def test_trend_hybrid_profile_locks_base_shares_in_uptrend():
+    """Phase 5.1 核心保险丝：
+
+    trend_hybrid profile 下，run_backtest 把 initial_shares 作为底仓线足计入。
+    单边上涨行情 + hybrid high 档 only_sell 原本会把持仓卖穿，接入后 final_shares
+    不会低于 initial_shares。
+    """
+    from atr_grid.config import for_profile
+
+    rows = _trending_rows(n=200, start=1.00, drift_per_day=0.005)
+    cfg = for_profile("trend_hybrid")
+    result = run_backtest(
+        rows=rows,
+        symbol="TEST_HYBRID_LOCK",
+        cfg=cfg,
+        profile_name="trend_hybrid",
+        initial_cash=10_000.0,
+        initial_shares=1000,
+        warmup_bars=60,
+    )
+    # 底仓线 1000 被锁——final_shares 必然 >= 1000
+    assert result.final_shares >= 1000, (
+        f"hybrid 底仓应被锁住为 1000，实际 final_shares={result.final_shares}"
+    )
+
+
+def test_non_hybrid_profile_backtest_results_unchanged():
+    """非 hybrid profile 下 apply_hybrid_overlay 透明返回，回测行为和 Phase 5 之前等价。
+
+    用震荡市纯网格跑一趟，断言买卖均产生 + trade_count > 0。
+    """
+    rows = _sinusoidal_rows(n=200, center=1.30, amp=0.10, period=20)
+    result = run_backtest(
+        rows=rows,
+        symbol="TEST_STABLE_UNCHANGED",
+        initial_cash=100_000.0,
+        initial_shares=2000,
+        trade_shares=200,
+        warmup_bars=60,
+    )
+    assert result.trade_count > 0
+    assert result.buy_count > 0
+    assert result.sell_count > 0

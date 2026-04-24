@@ -192,6 +192,10 @@ class PaperState:
     frozen: bool = False
     frozen_at: str | None = None
     frozen_price: float | None = None
+    # Phase 5.1: 底仓保护。simulate_day 的卖单不会让 shares 跌破 base_shares。
+    # 默认 0 = 不保护（完全等价 Phase 5 之前的行为）。
+    # hybrid 接入时由调用方设为 initial_shares（底仓），保证卖单至多砍到底仓为止。
+    base_shares: int = 0
 
 
 def simulate_day(
@@ -199,6 +203,10 @@ def simulate_day(
     plan: Any,
     *,
     trade_shares: int = DEFAULT_TRADE_SHARES,
+    cash_floor: float = 0.0,
+    total_equity: float = 0.0,
+    cfg: Any = None,
+    emergency_unlocked: bool = False,
 ) -> tuple[PaperState, list[dict[str, Any]]]:
     """根据上次 vs 本次 current_price 的跨越，决定当日虚拟成交。
 
@@ -273,7 +281,9 @@ def simulate_day(
 
     # 4. 向上跨越某档卖点 → 卖 1 tranche
     for lvl in sorted([x for x in sell_levels if x is not None]):
-        if prev < lvl <= current and shares >= trade_shares:
+        # Phase 5.1: 底仓保护——卖完后剩余持仓不能低于 base_shares。
+        # base_shares=0 时等价旧条件 shares >= trade_shares。
+        if prev < lvl <= current and shares - trade_shares >= state.base_shares:
             amount = trade_shares * lvl
             fee = commission(amount)
             shares -= trade_shares
@@ -296,7 +306,28 @@ def simulate_day(
             if prev > lvl >= current:
                 amount = trade_shares * lvl
                 fee = commission(amount)
-                if cash < amount + fee:
+                # Phase 5.2：cash_floor 闸。三个参数都有才启用 hybrid 版 guard；
+                # 否则走老逻辑（保证非 hybrid profile 和 live paper 行为不变）。
+                if cash_floor > 0.0 and total_equity > 0.0 and cfg is not None:
+                    from . import hybrid as _hybrid
+                    decision = _hybrid.cash_floor_guard(
+                        cash_before=cash,
+                        intended_amount=amount + fee,
+                        total_equity=total_equity,
+                        cfg=cfg,
+                        emergency_unlocked=emergency_unlocked,
+                    )
+                    # MVP：全额不够就不买这一档（不拆 lot）。生成 cash_floor_block 事件方便 debug。
+                    if decision.approved_amount + 1e-6 < amount + fee:
+                        events.append({
+                            "type": "cash_floor_block",
+                            "price": lvl,
+                            "amount_required": round(amount + fee, 2),
+                            "approved": round(decision.approved_amount, 2),
+                            "reason": decision.reason,
+                        })
+                        break
+                elif cash < amount + fee:
                     break
                 shares += trade_shares
                 cash -= amount + fee
