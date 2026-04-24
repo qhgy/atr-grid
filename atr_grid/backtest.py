@@ -102,6 +102,7 @@ def run_backtest(
     initial_cash: float = 100_000.0,
     trade_shares: int = DEFAULT_TRADE_SHARES,
     warmup_bars: int = 60,
+    kline_count: int | None = None,
 ) -> BacktestResult:
     """Walk-forward 回测。
 
@@ -114,10 +115,11 @@ def run_backtest(
     if rows is None:
         if not symbol:
             raise ValueError("Either `rows` or `symbol` must be provided")
+        effective_count = kline_count if kline_count is not None else max(warmup_bars + 200, 300)
         context = load_market_context(
             symbol,
             shares=max(initial_shares, 2000),
-            kline_count=max(warmup_bars + 200, 300),
+            kline_count=effective_count,
             cfg=cfg,
         )
         rows = list(context.rows)

@@ -21,9 +21,11 @@ from atr_grid.config import DEFAULT_CONFIG, for_profile
 def main() -> None:
     symbol = "SH515880"
     profiles = ["default", "stable", "dev", "aggressive"]
+    kline_count = 900          # 拉 ~3.6 年数据，跨周期验证
+    warmup_bars = 60
 
     all_results = []
-    print(f"\n=== Baseline backtest on {symbol} (walk-forward, close-to-close) ===\n")
+    print(f"\n=== Baseline backtest on {symbol} (walk-forward, close-to-close, kline_count={kline_count}) ===\n")
     print(
         "| profile | bars | trades | round_trips | win_rate | payoff | PF | total_ret% | bench_ret% | excess% | MDD% | Sharpe |"
     )
@@ -45,7 +47,8 @@ def main() -> None:
                 initial_cash=100_000.0,
                 initial_shares=2000,
                 trade_shares=200,
-                warmup_bars=60,
+                warmup_bars=warmup_bars,
+                kline_count=kline_count,
             )
         except Exception as exc:
             print(f"| {profile} | ERROR: {exc} |")
