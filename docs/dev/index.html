@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ATR Grid Dev Dashboard</title>
+<style>
+  :root {
+    --bg: #f4f5f7;
+    --surface: #ffffff;
+    --ink: #161616;
+    --muted: #6b6f76;
+    --line: #d8dbe0;
+    --line-strong: #b8bec7;
+    --green: #0f8a5f;
+    --red: #c2413a;
+    --amber: #b7791f;
+    --blue: #2457c5;
+    --cyan: #087f8c;
+    --black: #0b0d10;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background:
+      linear-gradient(90deg, rgba(11,13,16,.04) 1px, transparent 1px),
+      linear-gradient(180deg, rgba(11,13,16,.035) 1px, transparent 1px),
+      var(--bg);
+    background-size: 28px 28px;
+    color: var(--ink);
+    font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+    font-size: 15px;
+    line-height: 1.45;
+  }
+  a { color: inherit; }
+  .shell { width: min(1220px, calc(100vw - 28px)); margin: 0 auto; padding: 18px 0 34px; }
+  .topbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 16px;
+    align-items: start;
+    padding: 18px 0 16px;
+    border-bottom: 2px solid var(--black);
+  }
+  h1 { margin: 0; font-size: 28px; line-height: 1.1; font-weight: 900; }
+  .subtitle { margin-top: 6px; color: var(--muted); font-size: 13px; }
+  .branch {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border: 1px solid var(--black);
+    border-radius: 999px;
+    background: var(--black);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 800;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); display: inline-block; }
+  .meta-line { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; color: var(--muted); font-size: 12px; }
+  .metrics {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    margin: 16px 0;
+  }
+  .metric {
+    min-height: 78px;
+    padding: 12px 14px;
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    box-shadow: 0 1px 0 rgba(0,0,0,.05);
+  }
+  .metric-label { color: var(--muted); font-size: 12px; }
+  .metric-value { margin-top: 6px; font-size: 26px; font-weight: 900; line-height: 1; }
+  .metric-note { margin-top: 8px; color: var(--muted); font-size: 12px; }
+  .toolbar {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: center;
+    margin: 16px 0;
+  }
+  .snapshot {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  select {
+    height: 32px;
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    background: #fff;
+    color: var(--ink);
+    padding: 0 8px;
+    font: inherit;
+    font-size: 12px;
+  }
+  .table-wrap {
+    overflow-x: auto;
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+  }
+  table { width: 100%; border-collapse: collapse; min-width: 760px; }
+  th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th { color: var(--muted); font-size: 12px; font-weight: 800; background: #f9fafb; }
+  tr:last-child td { border-bottom: 0; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: #f0f7f6; }
+  .symbol { font-weight: 900; color: var(--black); }
+  .price { font-variant-numeric: tabular-nums; font-weight: 800; }
+  .change-up { color: var(--green); }
+  .change-down { color: var(--red); }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--line-strong);
+    background: #fff;
+    color: var(--ink);
+    font-size: 12px;
+    font-weight: 800;
+    white-space: nowrap;
+  }
+  .chip.green { border-color: rgba(15,138,95,.35); color: var(--green); background: #eef9f4; }
+  .chip.red { border-color: rgba(194,65,58,.35); color: var(--red); background: #fff1ef; }
+  .chip.amber { border-color: rgba(183,121,31,.35); color: var(--amber); background: #fff7e8; }
+  .chip.blue { border-color: rgba(36,87,197,.35); color: var(--blue); background: #eef4ff; }
+  .section-title { margin: 24px 0 10px; font-size: 13px; color: var(--muted); font-weight: 900; }
+  .instrument {
+    scroll-margin-top: 14px;
+    margin-top: 14px;
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    box-shadow: 0 1px 0 rgba(0,0,0,.05);
+  }
+  .instrument-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 14px;
+    padding: 16px;
+    border-bottom: 1px solid var(--line);
+  }
+  .instrument-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .instrument-title h2 { margin: 0; font-size: 22px; line-height: 1.1; }
+  .headline { margin-top: 8px; max-width: 760px; color: #30343a; font-weight: 700; }
+  .quote { text-align: right; }
+  .quote-price { font-size: 30px; font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; }
+  .quote-sub { margin-top: 6px; color: var(--muted); font-size: 12px; }
+  .instrument-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1.1fr) minmax(320px, .9fr);
+    gap: 0;
+  }
+  .panel { padding: 16px; border-right: 1px solid var(--line); }
+  .panel:last-child { border-right: 0; }
+  .panel-title { margin-bottom: 10px; font-size: 12px; color: var(--muted); font-weight: 900; }
+  .action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .action-cell { border: 1px solid var(--line); border-radius: 6px; padding: 10px; min-height: 72px; }
+  .action-cell strong { display: block; margin-top: 4px; font-size: 22px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .steps { margin: 0; padding-left: 18px; color: #30343a; }
+  .steps li + li { margin-top: 6px; }
+  .band { position: relative; height: 22px; border-radius: 999px; background: linear-gradient(90deg, #fff1ef, #fff7e8 35%, #eef9f4 65%, #eef4ff); border: 1px solid var(--line-strong); margin: 10px 0 8px; }
+  .band-marker { position: absolute; top: -5px; width: 3px; height: 30px; border-radius: 3px; background: var(--black); }
+  .band-labels { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; }
+  .mini-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 14px; }
+  .mini { border-top: 2px solid var(--line-strong); padding-top: 8px; min-height: 54px; }
+  .mini span { display: block; color: var(--muted); font-size: 11px; }
+  .mini strong { display: block; margin-top: 4px; font-size: 15px; font-variant-numeric: tabular-nums; }
+  .ladder { margin-top: 14px; display: grid; gap: 8px; }
+  .rung { display: grid; grid-template-columns: 50px 1fr 1fr auto; gap: 8px; align-items: center; min-height: 38px; border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+  .rung.current { border-color: rgba(183,121,31,.55); background: #fffaf0; }
+  .rung.passed { border-color: rgba(15,138,95,.35); background: #f3fbf7; }
+  .rung-label { color: var(--muted); font-size: 12px; font-weight: 800; }
+  .warn-list { margin: 12px 0 0; padding-left: 18px; color: var(--red); }
+  .footer { margin: 22px 0 0; color: var(--muted); font-size: 12px; text-align: center; }
+  @media (max-width: 860px) {
+    .topbar, .instrument-head, .instrument-body { grid-template-columns: 1fr; }
+    .quote, .meta-line { text-align: left; justify-content: flex-start; }
+    .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .panel { border-right: 0; border-bottom: 1px solid var(--line); }
+    .panel:last-child { border-bottom: 0; }
+  }
+  @media (max-width: 560px) {
+    .shell { width: min(100vw - 18px, 1220px); padding-top: 8px; }
+    h1 { font-size: 23px; }
+    .metrics, .action-grid, .mini-grid { grid-template-columns: 1fr; }
+    .toolbar { align-items: flex-start; flex-direction: column; }
+    .rung { grid-template-columns: 42px 1fr; }
+    .rung-status { grid-column: 2; }
+  }
+</style>
+</head>
+<body>
+<main class="shell">
+  <header class="topbar">
+    <div>
+      <span class="branch"><span class="dot"></span> DEV BRANCH</span>
+      <h1>ATR Grid Control Board</h1>
+      <div class="subtitle">多标的网格决策盘 · 只显示可执行信号、风险边界和纸面账本状态</div>
+    </div>
+    <div class="meta-line">
+      <span>生成 2026-04-25 00:50</span>
+      <span>数据日 2026-04-25</span>
+    </div>
+  </header>
+
+  <section class="metrics" aria-label="dashboard metrics">
+    <div class="metric"><div class="metric-label">监控标的</div><div class="metric-value">3</div><div class="metric-note">当前分支配置</div></div>
+    <div class="metric"><div class="metric-label">临近档位</div><div class="metric-value">3</div><div class="metric-note">触发 Server 酱阈值</div></div>
+    <div class="metric"><div class="metric-label">网格启用</div><div class="metric-value">1</div><div class="metric-note">可执行区间交易</div></div>
+    <div class="metric"><div class="metric-label">弱势观望</div><div class="metric-value">0</div><div class="metric-note">trend_down 计数</div></div>
+  </section>
+
+  <div class="toolbar">
+    <div class="section-title">汇总</div>
+    <div class="snapshot">今日 2026-04-25</div>
+  </div>
+
+  <section class="table-wrap" aria-label="symbol summary">
+    <table>
+      <thead>
+        <tr>
+          <th>代码</th>
+          <th>价格</th>
+          <th>状态</th>
+          <th>主卖</th>
+          <th>主买</th>
+          <th>动作</th>
+          <th>交易日</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr onclick="document.getElementById('sec-SH515880').scrollIntoView({behavior:'smooth'})"><td><span class="symbol">SH515880</span></td><td><span class="price">¥1.339</span> <span class="change-up">+0.00%</span></td><td><span class="chip green">多头趋势</span><span class="chip amber">锁利</span><span class="chip red">临近档位</span><span class="chip amber">网格暂停</span></td><td>¥1.445</td><td>¥1.393</td><td>保留大部分底仓，只把 200 股机动仓在 ¥1.445 附近先卖掉，...</td><td>2026-04-24</td></tr>
+<tr onclick="document.getElementById('sec-SH513500').scrollIntoView({behavior:'smooth'})"><td><span class="symbol">SH513500</span></td><td><span class="price">¥2.366</span> <span class="change-up">+0.00%</span></td><td><span class="chip blue">震荡区间</span><span class="chip blue">网格</span><span class="chip red">临近档位</span></td><td>¥2.399</td><td>¥2.251</td><td>只动 400 股机动仓做区间来回，不碰大部分底仓。</td><td>2026-04-24</td></tr>
+<tr onclick="document.getElementById('sec-SZ159915').scrollIntoView({behavior:'smooth'})"><td><span class="symbol">SZ159915</span></td><td><span class="price">¥3.674</span> <span class="change-up">+0.00%</span></td><td><span class="chip green">多头趋势</span><span class="chip amber">锁利</span><span class="chip red">临近档位</span><span class="chip amber">网格暂停</span></td><td>¥3.876</td><td>¥3.782</td><td>保留大部分底仓，只把 200 股机动仓在 ¥3.876 附近先卖掉，...</td><td>2026-04-24</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <div class="section-title">标的详情</div>
+
+  <article class="instrument" id="sec-SH515880">
+    <div class="instrument-head">
+      <div>
+        <div class="instrument-title">
+          <h2>SH515880</h2>
+          <span class="chip green">多头趋势</span><span class="chip amber">锁利</span><span class="chip red">临近档位</span><span class="chip amber">网格暂停</span>
+        </div>
+        <div class="headline">保留大部分底仓，只把 200 股机动仓在 ¥1.445 附近先卖掉，若回落到 ¥1.393 左右再接回。</div>
+      </div>
+      <div class="quote">
+        <div class="quote-price">¥1.339</div>
+        <div class="quote-sub"><span class="change-up">+0.00%</span> · api · 2026-04-24</div>
+      </div>
+    </div>
+    <div class="instrument-body">
+      <section class="panel">
+        <div class="panel-title">执行面板</div>
+        <div class="action-grid">
+          <div class="action-cell"><span>主卖点</span><strong class="change-down">¥1.445</strong></div>
+          <div class="action-cell"><span>主买点</span><strong class="change-up">¥1.393</strong></div>
+        </div>
+        <ol class="steps"><li>第1步：在 ¥1.445 附近先卖出 200 股机动仓，先把一部分利润落袋。</li><li>第2步：如果回落到 ¥1.393 左右，再把这 200 股接回来。</li><li>第3步：若后续明显走弱并逼近 ¥0.937 下方，停止用这套上涨回接思路。</li></ol>
+        <ul class="warn-list"><li>snowball_full_cookies_missing</li></ul>
+        <div class="panel-title" style="margin-top:16px">卖出梯队</div><div class="ladder"><div class="rung current"><div class="rung-label">L1</div><div><span>卖出</span><strong>¥1.445</strong></div><div><span>接回</span><strong>¥1.393</strong></div><div class="rung-status"><span class="chip">当前</span></div></div><div class="rung "><div class="rung-label">L2</div><div><span>卖出</span><strong>¥1.497</strong></div><div><span>接回</span><strong>¥1.445</strong></div><div class="rung-status"><span class="chip">等待</span></div></div><div class="rung "><div class="rung-label">L3</div><div><span>卖出</span><strong>¥1.549</strong></div><div><span>接回</span><strong>¥1.497</strong></div><div class="rung-status"><span class="chip">等待</span></div></div></div>
+      </section>
+      <section class="panel">
+        <div class="panel-title">价格结构</div>
+
+        <div class="band" aria-label="price position in Bollinger band">
+          <div class="band-marker" style="left:calc(76.78% - 1px)"></div>
+        </div>
+        <div class="band-labels">
+          <span>下轨 ¥0.989</span>
+          <span>现价 ¥1.339</span>
+          <span>上轨 ¥1.445</span>
+        </div>
+        <div class="mini-grid">
+          <div class="mini"><span>MA20</span><strong>¥1.217</strong></div>
+          <div class="mini"><span>MA60</span><strong>¥1.118</strong></div>
+          <div class="mini"><span>ATR14</span><strong>¥0.052</strong></div>
+          <div class="mini"><span>下沿失效</span><strong class="change-down">¥0.937</strong></div>
+          <div class="mini"><span>上沿突破</span><strong class="change-up">¥1.497</strong></div>
+          <div class="mini"><span>模板</span><strong>2000 / 200</strong></div>
+        </div>
+
+      </section>
+    </div>
+  </article>
+
+  <article class="instrument" id="sec-SH513500">
+    <div class="instrument-head">
+      <div>
+        <div class="instrument-title">
+          <h2>SH513500</h2>
+          <span class="chip blue">震荡区间</span><span class="chip blue">网格</span><span class="chip red">临近档位</span>
+        </div>
+        <div class="headline">只动 400 股机动仓做区间来回，不碰大部分底仓。</div>
+      </div>
+      <div class="quote">
+        <div class="quote-price">¥2.366</div>
+        <div class="quote-sub"><span class="change-up">+0.00%</span> · api · 2026-04-24</div>
+      </div>
+    </div>
+    <div class="instrument-body">
+      <section class="panel">
+        <div class="panel-title">执行面板</div>
+        <div class="action-grid">
+          <div class="action-cell"><span>主卖点</span><strong class="change-down">¥2.399</strong></div>
+          <div class="action-cell"><span>主买点</span><strong class="change-up">¥2.251</strong></div>
+        </div>
+        <ol class="steps"><li>第1步：若价格触及 ¥2.399，先卖出 400 股机动仓。</li><li>第2步：若价格回落到 ¥2.251 左右，再把这 400 股买回。</li><li>第3步：若跌破 ¥2.112，先停掉这轮区间交易。</li></ol>
+        <ul class="warn-list"><li>snowball_full_cookies_missing</li></ul>
+        <div class="panel-title" style="margin-top:16px">卖出梯队</div><div class="ladder"><div class="rung current"><div class="rung-label">L1</div><div><span>卖出</span><strong>¥2.399</strong></div><div><span>接回</span><strong>¥2.371</strong></div><div class="rung-status"><span class="chip">当前</span></div></div><div class="rung "><div class="rung-label">L2</div><div><span>卖出</span><strong>¥2.427</strong></div><div><span>接回</span><strong>¥2.399</strong></div><div class="rung-status"><span class="chip">等待</span></div></div><div class="rung "><div class="rung-label">L3</div><div><span>卖出</span><strong>¥2.455</strong></div><div><span>接回</span><strong>¥2.427</strong></div><div class="rung-status"><span class="chip">等待</span></div></div></div>
+      </section>
+      <section class="panel">
+        <div class="panel-title">价格结构</div>
+
+        <div class="band" aria-label="price position in Bollinger band">
+          <div class="band-marker" style="left:calc(76.42% - 1px)"></div>
+        </div>
+        <div class="band-labels">
+          <span>下轨 ¥2.140</span>
+          <span>现价 ¥2.366</span>
+          <span>上轨 ¥2.436</span>
+        </div>
+        <div class="mini-grid">
+          <div class="mini"><span>MA20</span><strong>¥2.288</strong></div>
+          <div class="mini"><span>MA60</span><strong>¥2.325</strong></div>
+          <div class="mini"><span>ATR14</span><strong>¥0.028</strong></div>
+          <div class="mini"><span>下沿失效</span><strong class="change-down">¥2.112</strong></div>
+          <div class="mini"><span>上沿突破</span><strong class="change-up">¥2.464</strong></div>
+          <div class="mini"><span>模板</span><strong>2000 / 200</strong></div>
+        </div>
+
+      </section>
+    </div>
+  </article>
+
+  <article class="instrument" id="sec-SZ159915">
+    <div class="instrument-head">
+      <div>
+        <div class="instrument-title">
+          <h2>SZ159915</h2>
+          <span class="chip green">多头趋势</span><span class="chip amber">锁利</span><span class="chip red">临近档位</span><span class="chip amber">网格暂停</span>
+        </div>
+        <div class="headline">保留大部分底仓，只把 200 股机动仓在 ¥3.876 附近先卖掉，若回落到 ¥3.782 左右再接回。</div>
+      </div>
+      <div class="quote">
+        <div class="quote-price">¥3.674</div>
+        <div class="quote-sub"><span class="change-up">+0.00%</span> · api · 2026-04-24</div>
+      </div>
+    </div>
+    <div class="instrument-body">
+      <section class="panel">
+        <div class="panel-title">执行面板</div>
+        <div class="action-grid">
+          <div class="action-cell"><span>主卖点</span><strong class="change-down">¥3.876</strong></div>
+          <div class="action-cell"><span>主买点</span><strong class="change-up">¥3.782</strong></div>
+        </div>
+        <ol class="steps"><li>第1步：在 ¥3.876 附近先卖出 200 股机动仓，先把一部分利润落袋。</li><li>第2步：如果回落到 ¥3.782 左右，再把这 200 股接回来。</li><li>第3步：若后续明显走弱并逼近 ¥2.916 下方，停止用这套上涨回接思路。</li></ol>
+        <ul class="warn-list"><li>snowball_full_cookies_missing</li></ul>
+        <div class="panel-title" style="margin-top:16px">卖出梯队</div><div class="ladder"><div class="rung current"><div class="rung-label">L1</div><div><span>卖出</span><strong>¥3.876</strong></div><div><span>接回</span><strong>¥3.782</strong></div><div class="rung-status"><span class="chip">当前</span></div></div><div class="rung "><div class="rung-label">L2</div><div><span>卖出</span><strong>¥3.970</strong></div><div><span>接回</span><strong>¥3.876</strong></div><div class="rung-status"><span class="chip">等待</span></div></div><div class="rung "><div class="rung-label">L3</div><div><span>卖出</span><strong>¥4.063</strong></div><div><span>接回</span><strong>¥3.969</strong></div><div class="rung-status"><span class="chip">等待</span></div></div></div>
+      </section>
+      <section class="panel">
+        <div class="panel-title">价格结构</div>
+
+        <div class="band" aria-label="price position in Bollinger band">
+          <div class="band-marker" style="left:calc(76.65% - 1px)"></div>
+        </div>
+        <div class="band-labels">
+          <span>下轨 ¥3.010</span>
+          <span>现价 ¥3.674</span>
+          <span>上轨 ¥3.876</span>
+        </div>
+        <div class="mini-grid">
+          <div class="mini"><span>MA20</span><strong>¥3.443</strong></div>
+          <div class="mini"><span>MA60</span><strong>¥3.339</strong></div>
+          <div class="mini"><span>ATR14</span><strong>¥0.094</strong></div>
+          <div class="mini"><span>下沿失效</span><strong class="change-down">¥2.916</strong></div>
+          <div class="mini"><span>上沿突破</span><strong class="change-up">¥3.970</strong></div>
+          <div class="mini"><span>模板</span><strong>2000 / 200</strong></div>
+        </div>
+
+      </section>
+    </div>
+  </article>
+
+  <div class="footer">ATR Grid · generated on dev · 2026-04-25 00:50</div>
+</main>
+</body>
+</html>
