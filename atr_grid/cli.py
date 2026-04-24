@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 
 from .engine import generate_plan, replay_symbol
+from .fund_eastmoney import fetch_fund_meta
 from .report import (
     beijing_now_str,
     beijing_today_str,
@@ -34,6 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     plan_parser.add_argument("--no-save", action="store_true", help="只打印结果，不自动保存默认报告")
     plan_parser.add_argument("--notify", action="store_true", help="价格临近网格档位时推送 Server酱通知")
     plan_parser.add_argument("--notify-always", action="store_true", help="无论价格位置都推送 Server酱通知")
+    plan_parser.add_argument("--no-fund", action="store_true", help="不拉取东财 ETF 基金元数据")
 
     replay_parser = subparsers.add_parser("replay", help="滚动回放最近 lookback 个交易日")
     replay_parser.add_argument("symbol", help="ETF 代码，如 SH515880 或 515880")
@@ -56,7 +58,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "plan":
         plan = generate_plan(args.symbol, shares=args.shares)
-        print(_plan_summary(plan))
+        fund_meta = None if args.no_fund else _safe_fetch_fund_meta(plan.symbol)
+        print(_plan_summary(plan, fund_meta=fund_meta))
         json_target, md_target = _resolve_output_paths(plan, args.json_out, args.md_out, args.no_save)
         if json_target is not None:
             write_json_report(plan, json_target)
@@ -75,7 +78,8 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 p = generate_plan(sym, shares=args.shares)
                 plans.append(p)
-                print(_plan_summary(p))
+                fund_meta = _safe_fetch_fund_meta(p.symbol)
+                print(_plan_summary(p, fund_meta=fund_meta))
             except Exception as exc:
                 print(f"[{sym}] 生成失败: {exc}")
         if plans:
@@ -90,7 +94,43 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _plan_summary(plan) -> str:
+def _safe_fetch_fund_meta(symbol: str) -> dict | None:
+    """拉东财 ETF 基金元数据，失败时返回 None 不阻断主流程。"""
+    try:
+        return fetch_fund_meta(symbol)
+    except Exception:  # noqa: BLE001 - 非关键路径
+        return None
+
+
+def _format_fund_meta(fund_meta: dict) -> str:
+    """格式化东财基金元数据为 2-3 行摘要。"""
+    code = fund_meta.get("code") or ""
+    name = fund_meta.get("name") or fund_meta.get("full_name") or "—"
+    nav = fund_meta.get("latest_nav")
+    nav_date = fund_meta.get("latest_nav_date") or "—"
+    est_price = fund_meta.get("estimate_price")
+    est_pct = fund_meta.get("estimate_percent")
+    est_time = fund_meta.get("estimate_time") or "—"
+    size_b = fund_meta.get("size_billion")
+    idx_name = fund_meta.get("tracking_index_name") or "—"
+    manager = fund_meta.get("manager") or "—"
+    nav_text = f"¥{nav:.4f}" if isinstance(nav, (int, float)) else "—"
+    est_text = (
+        f"¥{est_price:.4f}({est_pct:+.2f}%)"
+        if isinstance(est_price, (int, float)) and isinstance(est_pct, (int, float))
+        else "—"
+    )
+    size_text = f"{size_b:.2f}亿" if isinstance(size_b, (int, float)) else "—"
+    return "\n".join(
+        [
+            f"基金名称：{name}（{code}） | 跟踪：{idx_name}",
+            f"最新净值：{nav_text} @ {nav_date} | 实时估值：{est_text} @ {est_time}",
+            f"规模：{size_text} | 基金经理：{manager}",
+        ]
+    )
+
+
+def _plan_summary(plan, *, fund_meta: dict | None = None) -> str:
     buy_text = f"¥{plan.primary_buy:.3f}" if plan.primary_buy is not None else "N/A"
     sell_text = f"¥{plan.primary_sell:.3f}" if plan.primary_sell is not None else "N/A"
     lower_text = f"¥{plan.lower_invalidation:.3f}" if plan.lower_invalidation is not None else "N/A"
@@ -98,25 +138,26 @@ def _plan_summary(plan) -> str:
     risk_tip = _risk_tip(plan.regime, plan.grid_enabled)
     trim_text = f"{plan.trim_shares}股" if plan.trim_shares else "N/A"
     rebuy_text = f"¥{plan.rebuy_price:.3f}" if plan.rebuy_price is not None else "N/A"
-    return "\n".join(
-        [
-            f"[{plan.symbol}] ETF ATR 网格结论",
-            f"当前价：¥{plan.current_price:.3f} | 数据：{plan.data_source} | 最后交易日：{plan.last_trade_date}",
-            f"市场状态：{plan.regime} | 当前模式：{plan.mode} | 网格启用：{'是' if plan.grid_enabled else '否'}",
-            f"策略名称：{plan.strategy_name}",
-            f"现在该做什么：{plan.headline_action}",
-            f"标准模板：按 {plan.reference_position_shares} 股、每档 {plan.reference_tranche_shares} 股",
-            f"机械卖出网格：{fmt_levels(plan.reference_sell_ladder)}",
-            f"机械接回网格：{fmt_levels(plan.reference_rebuy_ladder)}",
-            f"趋势修正：最多卖 {plan.trend_sell_limit_shares} 股（{plan.trend_sell_limit_tranches} 档）",
-            f"趋势说明：{plan.trend_adjustment_note}",
-            f"主买点：{buy_text} | 主卖点：{sell_text}",
-            f"建议减仓：{trim_text} | 建议接回：{rebuy_text}",
-            f"失效下沿：{lower_text} | 突破上沿：{upper_text}",
-            f"结论：{plan.reason}",
-            f"风险提示：{risk_tip}",
-        ]
-    )
+    lines = [
+        f"[{plan.symbol}] ETF ATR 网格结论",
+        f"当前价：¥{plan.current_price:.3f} | 数据：{plan.data_source} | 最后交易日：{plan.last_trade_date}",
+        f"市场状态：{plan.regime} | 当前模式：{plan.mode} | 网格启用：{'是' if plan.grid_enabled else '否'}",
+        f"策略名称：{plan.strategy_name}",
+        f"现在该做什么：{plan.headline_action}",
+        f"标准模板：按 {plan.reference_position_shares} 股、每档 {plan.reference_tranche_shares} 股",
+        f"机械卖出网格：{fmt_levels(plan.reference_sell_ladder)}",
+        f"机械接回网格：{fmt_levels(plan.reference_rebuy_ladder)}",
+        f"趋势修正：最多卖 {plan.trend_sell_limit_shares} 股（{plan.trend_sell_limit_tranches} 档）",
+        f"趋势说明：{plan.trend_adjustment_note}",
+        f"主买点：{buy_text} | 主卖点：{sell_text}",
+        f"建议减仓：{trim_text} | 建议接回：{rebuy_text}",
+        f"失效下沿：{lower_text} | 突破上沿：{upper_text}",
+        f"结论：{plan.reason}",
+        f"风险提示：{risk_tip}",
+    ]
+    if fund_meta:
+        lines.append(_format_fund_meta(fund_meta))
+    return "\n".join(lines)
 
 
 def _replay_summary(replay: dict) -> str:
