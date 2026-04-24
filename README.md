@@ -2,7 +2,9 @@
 
 ETF ATR 网格策略引擎 · 自动化 Dashboard + 微信推送
 
-📊 **Dashboard**：https://qhgy.github.io/atr-grid/
+📊 **稳定版 Dashboard**：https://qhgy.github.io/atr-grid/
+
+🧪 **开发版 Dashboard**：https://qhgy.github.io/atr-grid/dev/
 
 ## 快速开始
 
