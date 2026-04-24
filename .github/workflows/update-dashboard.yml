@@ -2,8 +2,9 @@ name: Update ATR Grid Dashboard
 
 on:
   schedule:
-    # 09:00 Beijing time (UTC+8) on weekdays → 01:00 UTC
-    - cron: '0 1 * * 1-5'
+    # 09:07 Beijing time (UTC+8) on weekdays → 01:07 UTC
+    # Avoid the top of the hour because GitHub may delay or drop scheduled runs then.
+    - cron: '7 1 * * 1-5'
   workflow_dispatch:
     inputs:
       symbols:

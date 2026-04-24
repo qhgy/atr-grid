@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import argparse
 import os
-from datetime import datetime
 from pathlib import Path
 
 from .engine import generate_plan, replay_symbol
 from .report import (
+    beijing_now_str,
+    beijing_today_str,
     build_notify_content,
     default_report_paths,
     fmt_levels,
@@ -170,8 +171,8 @@ def _write_multi_html(plans: list) -> Path:
     from .report import render_html, _load_paper_state  # local import to avoid circular
     from core.paths import project_path
 
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-    today = datetime.now().strftime("%Y-%m-%d")
+    now_str = beijing_now_str()
+    today = beijing_today_str()
     sections = []
     summary_rows = []
 

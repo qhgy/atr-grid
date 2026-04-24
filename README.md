@@ -46,7 +46,7 @@ uv run python -m atr_grid replay SH515880 --lookback 30
 
 ## GitHub Actions
 
-每日北京时间 09:00 自动更新 Dashboard，临近档位推送微信（方糖 App）。
+每日北京时间 09:07 自动更新 Dashboard，临近档位推送微信（方糖 App）。
 
 所需 Secrets：`XUEQIUTOKEN`（雪球 Cookie）、`SERVERCHAN_KEY`（Server酱推送 Key）
 

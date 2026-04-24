@@ -7,7 +7,7 @@ import json
 import sys
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Sequence
 
@@ -40,6 +40,23 @@ CSV_HEADER_MAP = {
     "upper_breakout": "上沿突破",
     "note": "说明",
 }
+
+_BEIJING_TZ = timezone(timedelta(hours=8))
+
+
+def beijing_now() -> datetime:
+    """Return the current time in Beijing (UTC+8)."""
+    return datetime.now(_BEIJING_TZ)
+
+
+def beijing_now_str() -> str:
+    """Return the current Beijing time formatted for dashboard display."""
+    return beijing_now().strftime("%Y-%m-%d %H:%M")
+
+
+def beijing_today_str() -> str:
+    """Return today's date in Beijing time."""
+    return beijing_now().strftime("%Y-%m-%d")
 
 
 def write_json_report(plan: GridPlan, target: str | Path) -> Path:
@@ -450,7 +467,7 @@ def _load_paper_state(symbol: str) -> dict | None:
 
 def render_html(plan: GridPlan, *, paper_state: dict | None = None) -> str:
     """Render a self-contained HTML trading dashboard for *plan*."""
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now_str = beijing_now_str()
     snap = plan.snapshot
 
     # Price change vs last close
