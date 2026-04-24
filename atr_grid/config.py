@@ -24,6 +24,11 @@ class GridConfig:
     bb_num_std: float = 2.0
     atr_window: int = 14
 
+    # -- Phase 2.1: ADX + BBW --
+    adx_window: int = 14
+    adx_trend_threshold: float = 25.0  # ADX > 25 才确认趋势
+    bbw_percentile_window: int = 252  # BBW 分位滑动窗口
+
     # -- regime detection --
     regime_ma_lookback: int = 5
     regime_slope_threshold: float = 0.25
