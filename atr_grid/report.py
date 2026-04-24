@@ -381,7 +381,11 @@ def _translate_data_source(value: str) -> str:
 # Notifications (Server酱 / sctapi.ftqq.com)
 # ---------------------------------------------------------------------------
 
-_NOTIFY_THRESHOLD_PCT = 1.5  # fallback alert when price within 1.5% of any key level
+from .config import DEFAULT_CONFIG as _DEFAULT_CFG
+
+# Fallback alert when price within notify_threshold_pct% of any key level.
+# 保留模块级常量向后兼容现有 import，默认值从 config 读取，支持通过 profile 调整。
+_NOTIFY_THRESHOLD_PCT = _DEFAULT_CFG.notify_threshold_pct
 
 
 def should_notify(plan: GridPlan, threshold_pct: float = _NOTIFY_THRESHOLD_PCT) -> bool:

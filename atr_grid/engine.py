@@ -338,13 +338,15 @@ def _prealert_sell_price(target_sell: float | None, precision: int, cfg: GridCon
     if target_sell is None:
         return None
     min_tick = 10.0 ** -precision
-    return quantize_price(max(target_sell - cfg.prealert_abs_buffer, min_tick), precision)
+    buffer = max(cfg.prealert_abs_buffer, cfg.prealert_buffer_pct * target_sell)
+    return quantize_price(max(target_sell - buffer, min_tick), precision)
 
 
 def _prealert_buy_price(target_buy: float | None, precision: int, cfg: GridConfig = DEFAULT_CONFIG) -> float | None:
     if target_buy is None:
         return None
-    return quantize_price(target_buy + cfg.prealert_abs_buffer, precision)
+    buffer = max(cfg.prealert_abs_buffer, cfg.prealert_buffer_pct * target_buy)
+    return quantize_price(target_buy + buffer, precision)
 
 
 def _build_trend_trim_steps(trim_shares: int, sell_trigger: float, rebuy_price: float, lower_invalidation: float | None) -> list[str]:
