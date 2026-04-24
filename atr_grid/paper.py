@@ -3,14 +3,14 @@
 用 atr_grid 每日生成的 plan 驱动一个虚拟持仓，跨越真实成交之前积累纪律证据。
 
 **核心训练目标**：治"持有时舍不得卖、最后坐过山车"的散户毛病。
-默认按 2000 股底仓演练 → 分 10 份 → 每到目标档位加减 200 股。
+持有 1000 股 → 分 10 份 → 每涨一档卖 100 股 → 强制锻炼"卖出"。
 
 数据文件（在 aaa/paper_logs/ 下，自动创建）：
 - {SYMBOL}_state.json   — 当前虚拟持仓快照
 - {SYMBOL}.jsonl        — 每日流水（含 plan 概要 + 成交事件 + 组合净值）
 
 用法（在 aaa 目录下）：
-    python -m atr_grid.paper init SH515880 --shares 2000
+    python -m atr_grid.paper init SH515880 --shares 1000
     python -m atr_grid.paper run SH515880
     python -m atr_grid.paper status SH515880
 
@@ -31,7 +31,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import dataclass, asdict, replace
+from dataclasses import dataclass, asdict, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -48,8 +48,7 @@ LOG_DIR = AAA_ROOT / "output" / "paper_logs"
 
 COMMISSION_RATE = 0.0001   # 0.01% 佣金
 COMMISSION_MIN = 5.0       # 5 元起征
-DEFAULT_INITIAL_SHARES = 2000
-DEFAULT_TRADE_SHARES = 200
+TRANCHE_SHARES = 100       # 每次操作 1 手（100 股）
 
 
 @dataclass(slots=True)
@@ -57,7 +56,6 @@ class Portfolio:
     """虚拟组合状态。"""
 
     symbol: str
-    profile: str
     shares: int
     cash: float
     last_price: float | None
@@ -104,7 +102,6 @@ def load_portfolio(symbol: str) -> Portfolio | None:
     data.setdefault("frozen", False)
     data.setdefault("frozen_at", None)
     data.setdefault("frozen_price", None)
-    data.setdefault("profile", "stable")
     return Portfolio(**data)
 
 
@@ -143,30 +140,6 @@ def commission(amount: float) -> float:
     return max(amount * COMMISSION_RATE, COMMISSION_MIN)
 
 
-def _trade_shares() -> int:
-    """Fixed simulated trade size: +/- 200 shares around the 2000-share base."""
-    return DEFAULT_TRADE_SHARES
-
-
-def _cfg_for_profile(profile: str):
-    from atr_grid.config import DEFAULT_CONFIG, for_profile
-    return DEFAULT_CONFIG if profile in ("default", "stable") else for_profile(profile)
-
-
-def _profile_choices() -> list[str]:
-    from atr_grid.config import available_profiles
-    return available_profiles()
-
-
-def _resolve_profile(args: argparse.Namespace, p: Portfolio | None = None) -> str:
-    profile = getattr(args, "profile", None)
-    if profile:
-        return profile
-    if p is not None and p.profile:
-        return p.profile
-    return "stable"
-
-
 def _resolve_levels(plan: Any) -> tuple[list[float], list[float]]:
     """统一卖/买价位来源。
 
@@ -179,70 +152,14 @@ def _resolve_levels(plan: Any) -> tuple[list[float], list[float]]:
     return sell_levels, buy_levels
 
 
-# ===== Pure-function core (Phase 1.2) =======================================
-#
-# `simulate_day` 是整个成交决策的纯函数化内核：
-#   输入 (PaperState, plan)  →  输出 (new_state, events)
-#
-# 不触网络、不读写文件、不读时钟。相同输入必然给相同输出。
-# 供 `_simulate_fills` (paper run) 和即将到来的 backtest 引擎 (Phase 1.3) 共用。
-#
-# 行为完全等价于抽取前的 `_simulate_fills`，包括：
-#   - regime=trend_down / disabled / baseline 的早退
-#   - 成本止损 (stop_price) 跌破冻结
-#   - 失效下沿 (lower_invalidation) 停买不停卖
-#   - 向上跨档卖一档 / 向下跨档买一档
-#   - 现金不足时买单中止
-#   - hold 语义（没跨档 或 只在失效区间）
+def _simulate_fills(p: Portfolio, plan: Any) -> list[dict[str, Any]]:
+    """根据上次 vs 本次 current_price 的跨越判断是否触发成交。
 
-
-@dataclass(frozen=True, slots=True)
-class PaperState:
-    """虚拟盘的可变量状态（用于纯函数 simulate_day）。
-
-    注意：这是不可变 dataclass——simulate_day 通过 `dataclasses.replace` 生成新对象，
-    不修改原 state。`Portfolio` 仍是可变容器（负责持久化和 CLI 展示），
-    两者互相转换由 _simulate_fills 完成。
-    """
-
-    shares: int
-    cash: float
-    last_price: float | None = None
-    trades_count: int = 0
-    stop_price: float | None = None
-    frozen: bool = False
-    frozen_at: str | None = None
-    frozen_price: float | None = None
-    # Phase 5.1: 底仓保护。simulate_day 的卖单不会让 shares 跌破 base_shares。
-    # 默认 0 = 不保护（完全等价 Phase 5 之前的行为）。
-    # hybrid 接入时由调用方设为 initial_shares（底仓），保证卖单至多砍到底仓为止。
-    base_shares: int = 0
-
-
-def simulate_day(
-    state: PaperState,
-    plan: Any,
-    *,
-    trade_shares: int = DEFAULT_TRADE_SHARES,
-    cash_floor: float = 0.0,
-    total_equity: float = 0.0,
-    cfg: Any = None,
-    emergency_unlocked: bool = False,
-) -> tuple[PaperState, list[dict[str, Any]]]:
-    """根据上次 vs 本次 current_price 的跨越，决定当日虚拟成交。
-
-    这是 paper 模块和 backtest 引擎的共享内核。纯函数：不触 IO、不读时钟。
-
-    Args:
-        state:        当前虚拟盘状态（不会被修改）。
-        plan:         engine.generate_plan 生成的 GridPlan（或 duck-typed 等价物）。
-                      仅读取：current_price / regime / reason / lower_invalidation /
-                      sell_levels / buy_levels / reference_sell_ladder /
-                      reference_rebuy_ladder / last_trade_date。
-        trade_shares: 每档成交股数，默认 200。
-
-    Returns:
-        (new_state, events)
+    成交规则按 regime 分流：
+    - trend_down → 完全不动（不接飞刀，不恐慌减仓）
+    - disabled  → 完全不动（数据异常）
+    - range / trend_up → 都允许双向，价位来自 _resolve_levels
+    - invalidation 触发 → 仅停买，不停卖
     """
     events: list[dict[str, Any]] = []
     current = float(plan.current_price)
@@ -256,37 +173,31 @@ def simulate_day(
             "reason": plan.reason,
             "note": "下跌趋势期间持有不动，等市场结构修复",
         })
-        return state, events
+        return events
 
     # 2. 数据异常：不动
     if regime == "disabled":
         events.append({"type": "disabled", "reason": plan.reason})
-        return state, events
+        return events
 
     sell_levels, buy_levels = _resolve_levels(plan)
 
-    if state.last_price is None:
+    if p.last_price is None:
         events.append({"type": "baseline", "price": current, "note": "首日基线，不触发成交"})
-        return state, events
+        return events
 
-    prev = state.last_price
-    shares = state.shares
-    cash = state.cash
-    trades_count = state.trades_count
-    frozen = state.frozen
-    frozen_at = state.frozen_at
-    frozen_price = state.frozen_price
+    prev = p.last_price
 
     # 2.5 成本止损：跌破即冻结买入（仍允许触发卖出）
-    if state.stop_price is not None and current < state.stop_price and not frozen:
-        frozen = True
-        frozen_at = plan.last_trade_date
-        frozen_price = current
+    if p.stop_price is not None and current < p.stop_price and not p.frozen:
+        p.frozen = True
+        p.frozen_at = plan.last_trade_date
+        p.frozen_price = current
         events.append({
             "type": "stop_loss_trigger",
             "current": current,
-            "stop_price": state.stop_price,
-            "note": f"跌破成本止损 ¥{state.stop_price:.3f}，冻结接回；resume 命令可解冻",
+            "stop_price": p.stop_price,
+            "note": f"跌破成本止损 ¥{p.stop_price:.3f}，冻结接回；resume 命令可解冻",
         })
 
     # 3. 失效下沿警示（不阻止本日卖出，但停止接回）
@@ -302,18 +213,16 @@ def simulate_day(
 
     # 4. 向上跨越某档卖点 → 卖 1 tranche
     for lvl in sorted([x for x in sell_levels if x is not None]):
-        # Phase 5.1: 底仓保护——卖完后剩余持仓不能低于 base_shares。
-        # base_shares=0 时等价旧条件 shares >= trade_shares。
-        if prev < lvl <= current and shares - trade_shares >= state.base_shares:
-            amount = trade_shares * lvl
+        if prev < lvl <= current and p.shares >= TRANCHE_SHARES:
+            amount = TRANCHE_SHARES * lvl
             fee = commission(amount)
-            shares -= trade_shares
-            cash += amount - fee
-            trades_count += 1
+            p.shares -= TRANCHE_SHARES
+            p.cash += amount - fee
+            p.trades_count += 1
             events.append({
                 "type": "sell",
                 "price": lvl,
-                "shares": trade_shares,
+                "shares": TRANCHE_SHARES,
                 "amount": round(amount, 2),
                 "fee": round(fee, 2),
                 "net": round(amount - fee, 2),
@@ -322,41 +231,20 @@ def simulate_day(
             break  # 一天只卖一档
 
     # 5. 向下跨越某档买点 → 买 1 tranche（仅在 invalidation 未触发 且 未止损冻结时）
-    if not invalidated and not frozen:
+    if not invalidated and not p.frozen:
         for lvl in sorted([x for x in buy_levels if x is not None], reverse=True):
             if prev > lvl >= current:
-                amount = trade_shares * lvl
+                amount = TRANCHE_SHARES * lvl
                 fee = commission(amount)
-                # Phase 5.2：cash_floor 闸。三个参数都有才启用 hybrid 版 guard；
-                # 否则走老逻辑（保证非 hybrid profile 和 live paper 行为不变）。
-                if cash_floor > 0.0 and total_equity > 0.0 and cfg is not None:
-                    from . import hybrid as _hybrid
-                    decision = _hybrid.cash_floor_guard(
-                        cash_before=cash,
-                        intended_amount=amount + fee,
-                        total_equity=total_equity,
-                        cfg=cfg,
-                        emergency_unlocked=emergency_unlocked,
-                    )
-                    # MVP：全额不够就不买这一档（不拆 lot）。生成 cash_floor_block 事件方便 debug。
-                    if decision.approved_amount + 1e-6 < amount + fee:
-                        events.append({
-                            "type": "cash_floor_block",
-                            "price": lvl,
-                            "amount_required": round(amount + fee, 2),
-                            "approved": round(decision.approved_amount, 2),
-                            "reason": decision.reason,
-                        })
-                        break
-                elif cash < amount + fee:
+                if p.cash < amount + fee:
                     break
-                shares += trade_shares
-                cash -= amount + fee
-                trades_count += 1
+                p.shares += TRANCHE_SHARES
+                p.cash -= amount + fee
+                p.trades_count += 1
                 events.append({
                     "type": "buy",
                     "price": lvl,
-                    "shares": trade_shares,
+                    "shares": TRANCHE_SHARES,
                     "amount": round(amount, 2),
                     "fee": round(fee, 2),
                     "net": round(-(amount + fee), 2),
@@ -370,96 +258,22 @@ def simulate_day(
         events.append({"type": "hold", "price": current, "note": "未跨越任何价位"})
     elif not has_action and all(e["type"] == "invalidation" for e in events):
         events.append({"type": "hold", "price": current, "note": "失效区间内，未跨越卖点"})
-
-    new_state = replace(
-        state,
-        shares=shares,
-        cash=cash,
-        trades_count=trades_count,
-        frozen=frozen,
-        frozen_at=frozen_at,
-        frozen_price=frozen_price,
-    )
-    return new_state, events
-
-
-def _simulate_fills(
-    p: Portfolio,
-    plan: Any,
-    *,
-    cfg: Any = None,
-    frame: Any = None,
-) -> list[dict[str, Any]]:
-    """根据上次 vs 本次 current_price 的跨越判断是否触发成交。
-
-    成交规则按 regime 分流：
-    - trend_down → 完全不动（不接飞刀，不恐慌减仓）
-    - disabled  → 完全不动（数据异常）
-    - range / trend_up → 都允许双向，价位来自 _resolve_levels
-    - invalidation 触发 → 仅停买，不停卖
-
-    内部委托给纯函数 `simulate_day`（Phase 1.2 抽取），再把新状态回写到 Portfolio。
-    """
-    state = PaperState(
-        shares=p.shares,
-        cash=p.cash,
-        last_price=p.last_price,
-        trades_count=p.trades_count,
-        stop_price=p.stop_price,
-        frozen=p.frozen,
-        frozen_at=p.frozen_at,
-        frozen_price=p.frozen_price,
-        base_shares=p.initial_shares if getattr(cfg, "trend_hybrid_enabled", False) else 0,
-    )
-    current = float(plan.current_price)
-    total_equity = p.equity(current)
-    cash_floor = (
-        total_equity * getattr(cfg, "cash_floor_ratio", 0.0)
-        if getattr(cfg, "trend_hybrid_enabled", False)
-        else 0.0
-    )
-    emergency_unlocked = False
-    if getattr(cfg, "trend_hybrid_enabled", False) and frame is not None:
-        from atr_grid import hybrid as _hybrid
-        emergency_unlocked = _hybrid.should_emergency_refill(frame, cfg)
-
-    new_state, events = simulate_day(
-        state,
-        plan,
-        trade_shares=getattr(cfg, "reference_tranche_shares", _trade_shares()),
-        cash_floor=cash_floor,
-        total_equity=total_equity,
-        cfg=cfg,
-        emergency_unlocked=emergency_unlocked,
-    )
-    # 回写可变字段（last_price/stop_price 由外部 cmd_run 负责）
-    p.shares = new_state.shares
-    p.cash = new_state.cash
-    p.trades_count = new_state.trades_count
-    p.frozen = new_state.frozen
-    p.frozen_at = new_state.frozen_at
-    p.frozen_price = new_state.frozen_price
     return events
 
 
 # ----- CLI subcommands ------------------------------------------------------
 
 
-def _build_plan_and_frame(symbol: str, *, shares: int, cfg: Any):
+def _import_plan(symbol: str, shares: int = 200):
     """延迟 import + 把虚拟盘的真实 shares 传给 atr_grid，
     让 trim_shares = shares × 10% 计算正确（默认 200 股 → trim=0 是退化值）。
     """
-    from atr_grid.data import load_market_context
-    from atr_grid.engine import build_plan_with_frame
-
-    context = load_market_context(symbol, shares=shares, cfg=cfg)
-    return build_plan_with_frame(context, cfg=cfg)
+    from atr_grid.engine import generate_plan
+    return generate_plan(symbol, shares=shares)
 
 
 def cmd_init(args: argparse.Namespace) -> int:
     sym = args.symbol
-    profile = _resolve_profile(args)
-    cfg = _cfg_for_profile(profile)
     existing = load_portfolio(sym)
     if existing and not args.force:
         print(f"[init] {sym} 已存在虚拟持仓（shares={existing.shares} cash={existing.cash:.2f}）")
@@ -468,13 +282,12 @@ def cmd_init(args: argparse.Namespace) -> int:
     if args.force:
         clear_journal(sym)
 
-    plan, _frame = _build_plan_and_frame(sym, shares=args.shares, cfg=cfg)
+    plan = _import_plan(sym, shares=args.shares)
     price = float(plan.current_price)
     initial_cash = args.cash if args.cash is not None else 0.0
 
     p = Portfolio(
         symbol=sym,
-        profile=profile,
         shares=args.shares,
         cash=initial_cash,
         last_price=None,
@@ -486,7 +299,6 @@ def cmd_init(args: argparse.Namespace) -> int:
     )
     save_portfolio(p)
     print(f"[init] {sym} 虚拟盘已建立")
-    print(f"       profile：{profile}")
     print(f"       起始持仓：{args.shares} 股 @ ¥{price:.3f}（依据当日收盘）")
     print(f"       起始现金：¥{initial_cash:.2f}")
     if args.stop_price is not None:
@@ -501,34 +313,18 @@ def cmd_run(args: argparse.Namespace) -> int:
     sym = args.symbol
     p = load_portfolio(sym)
     if p is None:
-        print(f"[run] {sym} 未初始化，请先 python -m atr_grid.paper init {sym} --shares {DEFAULT_INITIAL_SHARES}",
+        print(f"[run] {sym} 未初始化，请先 python -m atr_grid.paper init {sym} --shares 1000",
               file=sys.stderr)
         return 1
 
-    profile = _resolve_profile(args, p)
-    cfg = _cfg_for_profile(profile)
-    profile_changed = profile != p.profile
-    if profile_changed:
-        p.profile = profile
-
-    plan, frame = _build_plan_and_frame(sym, shares=p.shares, cfg=cfg)
-    from atr_grid.engine import apply_hybrid_overlay
-    plan, allocation = apply_hybrid_overlay(
-        plan,
-        frame,
-        total_equity=p.equity(float(plan.current_price)),
-        cfg=cfg,
-    )
+    plan = _import_plan(sym, shares=p.shares)
     trade_date = plan.last_trade_date
 
     if p.last_trade_date == trade_date and not args.force:
-        if profile_changed:
-            save_portfolio(p)
-            print(f"[run] {sym} profile 已更新为 {profile}")
         print(f"[run] {sym} 的交易日 {trade_date} 已记录，--force 可覆盖")
         return 0
 
-    events = _simulate_fills(p, plan, cfg=cfg, frame=frame)
+    events = _simulate_fills(p, plan)
     current = float(plan.current_price)
     p.last_price = current
     p.last_trade_date = trade_date
@@ -545,8 +341,6 @@ def cmd_run(args: argparse.Namespace) -> int:
         "ts": datetime.now().isoformat(timespec="seconds"),
         "trade_date": trade_date,
         "symbol": sym,
-        "profile": profile,
-        "hybrid_enabled": bool(getattr(cfg, "trend_hybrid_enabled", False)),
         "current_price": current,
         "regime": plan.regime,
         "mode": plan.mode,
@@ -558,7 +352,6 @@ def cmd_run(args: argparse.Namespace) -> int:
         "buy_levels_used": buy_levels_used,
         "lower_invalidation": plan.lower_invalidation,
         "upper_breakout": plan.upper_breakout,
-        "hybrid_allocation": asdict(allocation) if allocation is not None else None,
         "events": events,
         "portfolio": {
             "shares": p.shares,
@@ -574,7 +367,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     # 终端摘要
     print(f"[run] {sym} trade_date={trade_date}  当前 ¥{current:.3f}  "
-          f"profile={profile}  regime={plan.regime}  mode={plan.mode}")
+          f"regime={plan.regime}  mode={plan.mode}")
     if sell_levels_used:
         print(f"       卖出阶梯：{' / '.join(f'¥{x:.3f}' for x in sell_levels_used)}")
     if buy_levels_used:
@@ -597,8 +390,6 @@ def cmd_run(args: argparse.Namespace) -> int:
             print(f"       · 首日基线 ¥{e['price']:.3f}，未触发成交")
         elif e["type"] == "hold":
             print(f"       · {e['note']}")
-        elif e["type"] == "cash_floor_block":
-            print(f"       · 现金地板拦截买入：需 ¥{e['amount_required']:.2f}，可用 ¥{e['approved']:.2f}")
     print(f"       组合：shares={p.shares}  cash=¥{p.cash:.2f}  equity=¥{equity:.2f}")
     print(f"       对比纯持仓：¥{diff:+.2f} ({diff_pct:+.3f}%)  累计交易 {p.trades_count} 次")
     if p.stop_price is not None:
@@ -626,7 +417,6 @@ def cmd_status(args: argparse.Namespace) -> int:
 
     print(f"\n===== {sym} 虚拟盘报告 =====")
     print(f"  起始：{p.created_at[:10]}  初始持仓 {p.initial_shares} 股 @ ¥{p.initial_price:.3f}")
-    print(f"  profile：{p.profile}")
     print(f"  最新：{last['trade_date']}  当前价 ¥{last['current_price']:.3f}")
     print(f"  当前持仓：{p.shares} 股 + 现金 ¥{p.cash:.2f}")
     print(f"  当前净值：¥{last['portfolio']['equity']:.2f}")
@@ -718,10 +508,8 @@ def main(argv: list[str] | None = None) -> int:
 
     p_init = sub.add_parser("init", help="初始化虚拟持仓")
     p_init.add_argument("symbol", help="标的代码，如 SH510300")
-    p_init.add_argument("--shares", type=int, default=DEFAULT_INITIAL_SHARES, help=f"起始股数（默认 {DEFAULT_INITIAL_SHARES}）")
+    p_init.add_argument("--shares", type=int, default=1000, help="起始股数（默认 1000）")
     p_init.add_argument("--cash", type=float, default=0.0, help="起始现金（默认 0）")
-    p_init.add_argument("--profile", default="stable", choices=_profile_choices(),
-                        help="策略 profile，默认 stable")
     p_init.add_argument("--stop-price", type=float, default=None,
                         help="成本止损价，跌破即冻结接回（仍允许卖出）；如 --stop-price 1.0")
     p_init.add_argument("--force", action="store_true", help="覆盖已有状态")
@@ -729,8 +517,6 @@ def main(argv: list[str] | None = None) -> int:
 
     p_run = sub.add_parser("run", help="执行当日 plan + 虚拟成交 + 写日志")
     p_run.add_argument("symbol", help="标的代码")
-    p_run.add_argument("--profile", default=None, choices=_profile_choices(),
-                       help="临时覆盖并保存策略 profile；默认沿用 init 时的 profile")
     p_run.add_argument("--force", action="store_true", help="同一 trade_date 强制重跑")
     p_run.set_defaults(func=cmd_run)
 

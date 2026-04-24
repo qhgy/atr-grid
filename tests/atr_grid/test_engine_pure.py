@@ -10,8 +10,6 @@ from atr_grid.engine import (
     _effective_step,
     _generate_buy_levels,
     _generate_sell_levels,
-    _prealert_buy_price,
-    _prealert_sell_price,
     _suggest_tactical_shares,
     _suggest_trim_shares,
     quantize_price,
@@ -144,48 +142,3 @@ class TestBuildReferenceLadder:
         sell, rebuy = _build_reference_ladder(anchor_sell=1.0, atr14=100.0, precision=3)
         for price in rebuy:
             assert price > 0
-
-    def test_default_multipliers_are_symmetric(self):
-        # 默认 multiplier=1.0 等价于旧版对称 ladder
-        cfg = GridConfig()
-        assert cfg.ladder_sell_step_multiplier == 1.0
-        assert cfg.ladder_rebuy_step_multiplier == 1.0
-        sell, rebuy = _build_reference_ladder(anchor_sell=100.0, atr14=2.0, precision=3, cfg=cfg)
-        assert sell == [100.0, 102.0, 104.0]
-        assert rebuy == [98.0, 100.0, 102.0]
-
-    def test_asymmetric_sell_step_widens_sell_ladder(self):
-        # sell_mult=1.5 → 卖档每档多走 0.5 ATR
-        cfg = GridConfig(ladder_sell_step_multiplier=1.5, ladder_rebuy_step_multiplier=1.0)
-        sell, rebuy = _build_reference_ladder(anchor_sell=100.0, atr14=2.0, precision=3, cfg=cfg)
-        # sell[i] = 100 + i * 1.5 * 2 = 100, 103, 106
-        assert sell == [100.0, 103.0, 106.0]
-        # rebuy[i] = sell[i] - 1.0 * 2 = 98, 101, 104
-        assert rebuy == [98.0, 101.0, 104.0]
-
-    def test_asymmetric_rebuy_step_tightens_rebuy(self):
-        # rebuy_mult=0.5 → 买档距卖档更近
-        cfg = GridConfig(ladder_sell_step_multiplier=1.0, ladder_rebuy_step_multiplier=0.5)
-        sell, rebuy = _build_reference_ladder(anchor_sell=100.0, atr14=2.0, precision=3, cfg=cfg)
-        assert sell == [100.0, 102.0, 104.0]
-        # rebuy[i] = sell[i] - 0.5 * 2 = 99, 101, 103
-        assert rebuy == [99.0, 101.0, 103.0]
-
-    def test_asymmetric_combined_sell_wider_rebuy_tighter(self):
-        # 典型不对称：卖档疏，买档密
-        cfg = GridConfig(ladder_sell_step_multiplier=1.2, ladder_rebuy_step_multiplier=0.8)
-        sell, rebuy = _build_reference_ladder(anchor_sell=100.0, atr14=2.0, precision=3, cfg=cfg)
-        # sell_step = 2.4：sell = 100, 102.4, 104.8
-        assert sell == [100.0, 102.4, 104.8]
-        # rebuy_step = 1.6：rebuy = sell - 1.6
-        assert rebuy == [98.4, 100.8, 103.2]
-
-
-class TestPrealertPrices:
-    def test_sell_prealert_is_target_minus_abs_buffer(self):
-        cfg = GridConfig(prealert_abs_buffer=0.005)
-        assert _prealert_sell_price(1.400, 3, cfg) == 1.395
-
-    def test_buy_prealert_is_target_plus_abs_buffer(self):
-        cfg = GridConfig(prealert_abs_buffer=0.005)
-        assert _prealert_buy_price(1.400, 3, cfg) == 1.405

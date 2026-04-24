@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 
-from core.market_data import get_current_price, get_kline_data, normalize_sina_kline_rows
+from core.market_data import get_current_price
 from atr_grid.data import _to_float, normalize_symbol
 
 
@@ -60,53 +60,3 @@ class TestGetCurrentPrice:
             raise ModuleNotFoundError("requests")
 
         assert get_current_price("SH515880", quote_fetcher=broken_fetcher) is None
-
-    def test_quote_falls_back_to_sina_when_supplied(self):
-        def broken_fetcher(_symbol: str):
-            return None
-
-        def fake_sina_quote(_symbol: str):
-            return 'var hq_str_sh515880="通信ETF,1.264,1.264,1.309,1.320,1.250";'
-
-        assert get_current_price(
-            "SH515880",
-            quote_fetcher=broken_fetcher,
-            sina_quote_fetcher=fake_sina_quote,
-        ) == 1.309
-
-
-class TestSinaKlineFallback:
-    def test_normalize_sina_legacy_rows(self):
-        raw = '[{day:"2026-04-23",open:"1.10",high:"1.20",low:"1.00",close:"1.15",volume:"123"}]'
-
-        rows = normalize_sina_kline_rows(raw)
-
-        assert rows is not None
-        assert len(rows) == 1
-        assert rows[0]["open"] == 1.10
-        assert rows[0]["close"] == 1.15
-        assert rows[0]["volume"] == 123.0
-        assert rows[0]["timestamp"] > 0
-
-    def test_get_kline_data_uses_sina_after_api_failure(self):
-        def broken_kline(_symbol: str, _period: str, _count: int):
-            raise RuntimeError("snowball unavailable")
-
-        def fake_sina(_symbol: str, _count: int):
-            return [
-                {"day": "2026-04-22", "open": "1.00", "high": "1.10", "low": "0.95", "close": "1.05", "volume": "100"},
-                {"day": "2026-04-23", "open": "1.05", "high": "1.20", "low": "1.01", "close": "1.15", "volume": "120"},
-                {"day": "2026-04-24", "open": "1.15", "high": "1.30", "low": "1.10", "close": "1.25", "volume": "140"},
-            ]
-
-        rows, source = get_kline_data(
-            "SH515880",
-            count=2,
-            kline_fetcher=broken_kline,
-            sina_fetcher=fake_sina,
-        )
-
-        assert source == "sina"
-        assert rows is not None
-        assert len(rows) == 2
-        assert rows[-1]["close"] == 1.25

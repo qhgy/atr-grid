@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
@@ -14,8 +13,6 @@ from core.xueqiu_session import ensure_xueqiu_token_loaded
 QuoteFetcher = Callable[[str], dict[str, Any] | None]
 KlineFetcher = Callable[[str, str, int], dict[str, Any] | None]
 AkshareEtfFetcher = Callable[[str, str, str], Any]
-SinaKlineFetcher = Callable[[str, int], Any]
-SinaQuoteFetcher = Callable[[str], Any]
 
 
 def _default_quote_fetcher(symbol: str) -> dict[str, Any] | None:
@@ -32,38 +29,6 @@ def _default_kline_fetcher(symbol: str, period: str, count: int) -> dict[str, An
     from pysnowball import kline
 
     return kline(symbol, period=period, count=count)
-
-
-def _default_sina_kline_fetcher(symbol: str, count: int) -> str:
-    import requests
-
-    url = "https://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData"
-    response = requests.get(
-        url,
-        params={"symbol": _to_sina_symbol(symbol), "scale": 240, "ma": "no", "datalen": count},
-        headers={
-            "Referer": "https://finance.sina.com.cn/",
-            "User-Agent": "Mozilla/5.0",
-        },
-        timeout=10,
-    )
-    response.raise_for_status()
-    return response.text
-
-
-def _default_sina_quote_fetcher(symbol: str) -> str:
-    import requests
-
-    response = requests.get(
-        f"https://hq.sinajs.cn/list={_to_sina_symbol(symbol)}",
-        headers={
-            "Referer": "https://finance.sina.com.cn/",
-            "User-Agent": "Mozilla/5.0",
-        },
-        timeout=8,
-    )
-    response.raise_for_status()
-    return response.text
 
 
 def get_realtime_quote(
@@ -89,24 +54,15 @@ def get_current_price(
     symbol: str,
     *,
     quote_fetcher: QuoteFetcher | None = None,
-    sina_quote_fetcher: SinaQuoteFetcher | None = None,
 ) -> float | None:
     """Return the current price for a symbol if available."""
     quote = get_realtime_quote(symbol, quote_fetcher=quote_fetcher)
-    if quote:
-        current = quote.get("current")
-        try:
-            return float(current)
-        except (TypeError, ValueError):
-            pass
-
-    # Keep injected quote fetchers deterministic in tests/callers unless a Sina fetcher is supplied.
-    if quote_fetcher is not None and sina_quote_fetcher is None:
+    if not quote:
         return None
-    fetcher = sina_quote_fetcher or _default_sina_quote_fetcher
+    current = quote.get("current")
     try:
-        return normalize_sina_quote_price(fetcher(symbol))
-    except Exception:
+        return float(current)
+    except (TypeError, ValueError):
         return None
 
 
@@ -211,78 +167,12 @@ def normalize_akshare_etf_rows(result: Any) -> list[dict[str, Any]] | None:
     return normalized or None
 
 
-def normalize_sina_kline_rows(result: Any) -> list[dict[str, Any]] | None:
-    """Convert Sina daily K-line response rows into the internal kline shape."""
-    if result is None:
-        return None
-    if isinstance(result, bytes):
-        result = result.decode("utf-8", errors="ignore")
-    if isinstance(result, str):
-        text = result.strip()
-        if not text:
-            return None
-        try:
-            parsed = json.loads(text)
-        except json.JSONDecodeError:
-            parsed = _parse_sina_legacy_rows(text)
-    else:
-        parsed = result
-    if not isinstance(parsed, list):
-        return None
-
-    normalized: list[dict[str, Any]] = []
-    for row in parsed:
-        if not isinstance(row, dict):
-            continue
-        trade_date = row.get("day") or row.get("date")
-        if not trade_date:
-            continue
-        try:
-            timestamp = int(datetime.strptime(str(trade_date), "%Y-%m-%d").timestamp() * 1000)
-        except ValueError:
-            continue
-        normalized.append(
-            {
-                "timestamp": timestamp,
-                "volume": _safe_number(row.get("volume")),
-                "open": _safe_number(row.get("open")),
-                "high": _safe_number(row.get("high")),
-                "low": _safe_number(row.get("low")),
-                "close": _safe_number(row.get("close")),
-                "chg": None,
-                "percent": None,
-                "turnoverrate": None,
-                "amount": _safe_number(row.get("amount")),
-                "volume_post": None,
-                "amount_post": None,
-            }
-        )
-    normalized.sort(key=lambda item: item.get("timestamp") or 0)
-    return normalized or None
-
-
-def normalize_sina_quote_price(result: Any) -> float | None:
-    """Extract current price from hq.sinajs.cn quote text."""
-    if result is None:
-        return None
-    if isinstance(result, bytes):
-        result = result.decode("gbk", errors="ignore")
-    text = str(result)
-    match = re.search(r'="([^"]*)"', text)
-    payload = match.group(1) if match else text
-    fields = payload.split(",")
-    if len(fields) < 4:
-        return None
-    return _safe_number(fields[3])
-
-
 def get_kline_data(
     symbol: str,
     *,
     count: int = 100,
     period: str = "day",
     kline_fetcher: KlineFetcher | None = None,
-    sina_fetcher: SinaKlineFetcher | None = None,
     akshare_fetcher: AkshareEtfFetcher | None = None,
     base_dir: str | Path | None = None,
 ) -> tuple[list[dict[str, Any]] | None, str]:
@@ -295,17 +185,6 @@ def get_kline_data(
             return rows, "api"
     except Exception:
         pass
-
-    if period == "day" and _looks_like_etf(symbol):
-        fetch_sina = sina_fetcher or _default_sina_kline_fetcher
-        try:
-            sina_rows = normalize_sina_kline_rows(fetch_sina(symbol, count))
-            if sina_rows:
-                if len(sina_rows) > count:
-                    return sina_rows[-count:], "sina"
-                return sina_rows, "sina"
-        except Exception:
-            pass
 
     if period == "day" and _looks_like_etf(symbol):
         ak_fetcher = akshare_fetcher or _default_akshare_etf_fetcher
@@ -344,27 +223,6 @@ def _strip_exchange_prefix(symbol: str) -> str:
     if normalized.startswith(("SH", "SZ")):
         return normalized[2:]
     return normalized
-
-
-def _to_sina_symbol(symbol: str) -> str:
-    normalized = str(symbol).strip().lower()
-    if normalized.startswith(("sh", "sz")):
-        return normalized
-    raw = _strip_exchange_prefix(normalized)
-    if raw.startswith(("5", "6", "9")):
-        return f"sh{raw}"
-    return f"sz{raw}"
-
-
-def _parse_sina_legacy_rows(text: str) -> list[dict[str, str]]:
-    rows: list[dict[str, str]] = []
-    for body in re.findall(r"\{([^{}]+)\}", text):
-        row: dict[str, str] = {}
-        for key, value in re.findall(r"([A-Za-z_][A-Za-z0-9_]*)\s*:\s*\"?([^,\"}]+)\"?", body):
-            row[key] = value
-        if row:
-            rows.append(row)
-    return rows
 
 
 def _safe_number(value: Any) -> float | None:

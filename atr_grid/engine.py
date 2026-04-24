@@ -9,7 +9,6 @@ from .config import DEFAULT_CONFIG, GridConfig
 from .data import MarketContext, load_market_context
 from .indicators import IndicatorSnapshot, build_indicator_frame, latest_snapshot
 from .regime import RegimeResult, classify_regime
-from . import hybrid as _hybrid
 
 
 @dataclass(slots=True)
@@ -43,8 +42,6 @@ class GridPlan:
     step: float | None
     primary_buy: float | None
     primary_sell: float | None
-    prealert_buy: float | None
-    prealert_sell: float | None
     buy_levels: list[float]
     sell_levels: list[float]
     lower_invalidation: float | None
@@ -273,8 +270,6 @@ def _make_plan(
         step=None,
         primary_buy=None,
         primary_sell=None,
-        prealert_buy=None,
-        prealert_sell=None,
         buy_levels=[],
         sell_levels=[],
         lower_invalidation=None,
@@ -327,29 +322,12 @@ def _build_reference_ladder(anchor_sell: float, atr14: float, precision: int, cf
     sell_ladder: list[float] = []
     rebuy_ladder: list[float] = []
     min_tick = 10.0 ** -precision  # smallest representable price at this precision
-    sell_step = atr14 * cfg.ladder_sell_step_multiplier
-    rebuy_step = atr14 * cfg.ladder_rebuy_step_multiplier
     for index in range(cfg.ladder_tranches):
-        sell_price = quantize_price(anchor_sell + index * sell_step, precision)
-        rebuy_price = quantize_price(max(sell_price - rebuy_step, min_tick), precision)
+        sell_price = quantize_price(anchor_sell + index * atr14, precision)
+        rebuy_price = quantize_price(max(sell_price - atr14, min_tick), precision)
         sell_ladder.append(sell_price)
         rebuy_ladder.append(rebuy_price)
     return sell_ladder, rebuy_ladder
-
-
-def _prealert_sell_price(target_sell: float | None, precision: int, cfg: GridConfig = DEFAULT_CONFIG) -> float | None:
-    if target_sell is None:
-        return None
-    min_tick = 10.0 ** -precision
-    buffer = max(cfg.prealert_abs_buffer, cfg.prealert_buffer_pct * target_sell)
-    return quantize_price(max(target_sell - buffer, min_tick), precision)
-
-
-def _prealert_buy_price(target_buy: float | None, precision: int, cfg: GridConfig = DEFAULT_CONFIG) -> float | None:
-    if target_buy is None:
-        return None
-    buffer = max(cfg.prealert_abs_buffer, cfg.prealert_buffer_pct * target_buy)
-    return quantize_price(target_buy + buffer, precision)
 
 
 def _build_trend_trim_steps(trim_shares: int, sell_trigger: float, rebuy_price: float, lower_invalidation: float | None) -> list[str]:
@@ -441,8 +419,6 @@ def _build_trend_up_plan(pctx: _PlanContext) -> GridPlan:
         step=pctx.step,
         primary_buy=rebuy_price,
         primary_sell=sell_trigger,
-        prealert_buy=_prealert_buy_price(rebuy_price, ctx.price_precision, cfg),
-        prealert_sell=_prealert_sell_price(sell_trigger, ctx.price_precision, cfg),
         lower_invalidation=pctx.lower_invalidation,
         upper_breakout=pctx.upper_breakout,
         trim_shares=trim_shares,
@@ -520,133 +496,8 @@ def _build_range_plan(pctx: _PlanContext) -> GridPlan:
         step=pctx.step,
         primary_buy=primary_buy,
         primary_sell=primary_sell,
-        prealert_buy=_prealert_buy_price(primary_buy, precision, cfg),
-        prealert_sell=_prealert_sell_price(primary_sell, precision, cfg),
         buy_levels=buy_levels,
         sell_levels=sell_levels,
         lower_invalidation=pctx.lower_invalidation,
         upper_breakout=pctx.upper_breakout,
     )
-
-
-# ---------------------------------------------------------------------------
-# Phase 4 · Trend-Hybrid overlay
-# ---------------------------------------------------------------------------
-#
-# 这是 engine.py 到 hybrid 模块的唯一接线点。
-#
-# 设计要点：
-# - `build_plan_from_context` / `generate_plan` 主路径零改动（保证 stable /
-#   dev / balanced / yield 五个老 profile 行为一致，由 165/165 测试兜底）。
-# - 调用方（paper / cli / scripts）如果想启用分层资金，显式调用
-#   `apply_hybrid_overlay`；未启用时（cfg.trend_hybrid_enabled=False）返回
-#   `(plan, None)`，完全透明。
-# - 不在这里读任何 state / 文件 / 时钟——纯函数。资金是否动用由下游
-#   根据返回的 CapitalAllocation 自行决定。
-
-
-def build_plan_with_frame(
-    context: MarketContext,
-    cfg: GridConfig = DEFAULT_CONFIG,
-) -> tuple[GridPlan, "object"]:
-    """Build a plan AND return the indicator frame, so callers can reuse it.
-
-    和 `build_plan_from_context` 行为等价，但额外返回 `frame`，避免
-    下游为了跑 hybrid 再重算一遍指标。frame 的类型对 engine 保持透明
-    （hybrid 模块用到的是 pandas.DataFrame，但 engine 这里不强制 import）。
-    """
-    frame = build_indicator_frame(context.rows, cfg)
-    snapshot = latest_snapshot(frame)
-    regime = classify_regime(frame, snapshot, cfg)
-    plan = _assemble_plan(context, snapshot, regime, cfg)
-    return plan, frame
-
-
-def _restrict_plan_for_only_sell(plan: GridPlan) -> GridPlan:
-    """Return a copy of plan with buy-side grid levels cleared.
-
-    在 `only_sell` 档位（位置高位）使用：网格依然按原价位卖，但任何
-    买单侧价位（primary_buy / buy_levels / reference_rebuy_ladder / rebuy_price）
-    全部清空，前端 / paper 层据此不生成买单事件。
-    """
-    from dataclasses import replace as _dc_replace
-
-    warnings = list(plan.warnings)
-    if "hybrid_only_sell_applied" not in warnings:
-        warnings.append("hybrid_only_sell_applied")
-
-    reason = plan.reason
-    top_tag = "位置进入高位，仅保留卖出网格，不再新建买单。"
-    if top_tag not in reason:
-        reason = (reason + " " + top_tag).strip()
-
-    return _dc_replace(
-        plan,
-        primary_buy=None,
-        prealert_buy=None,
-        buy_levels=[],
-        reference_rebuy_ladder=[],
-        rebuy_price=None,
-        warnings=warnings,
-        reason=reason,
-    )
-
-
-def apply_hybrid_overlay(
-    plan: GridPlan,
-    frame,
-    *,
-    total_equity: float,
-    cfg: GridConfig = DEFAULT_CONFIG,
-):
-    """Apply Trend-Hybrid 分层资金到已有 plan（可选、零侵入）。
-
-    返回 ``(maybe_modified_plan, allocation_or_none)``：
-
-    - 当 ``cfg.trend_hybrid_enabled=False``：返回 ``(plan, None)``，什么
-      都不做，调用方按老路径使用 plan。
-    - 启用时：
-        1. 用 `hybrid.position_percentile` 算出当前位置刻度；
-        2. 用 `hybrid.compute_capital_allocation` 得到四层预算；
-        3. 若 `allocation.only_sell=True`，返回剔除买单侧的 plan 副本；
-        4. 其他情况返回原 plan；资金配额由调用方（paper / cli）按需消费
-           （本函数不强行改写 plan 里的股数 / 触发价位）。
-
-    这样 engine 只负责\"提供分层建议\"，不直接干预成交；真正的下单闸门
-    在 paper 层用 `hybrid.cash_floor_guard` 做。责任分层清晰，便于单测。
-    """
-    if not getattr(cfg, "trend_hybrid_enabled", False):
-        return plan, None
-
-    pct = _hybrid.position_percentile(frame, window=cfg.position_window)
-    allocation = _hybrid.compute_capital_allocation(
-        total_equity=float(total_equity),
-        percentile=pct,
-        cfg=cfg,
-    )
-    if allocation.only_sell:
-        return _restrict_plan_for_only_sell(plan), allocation
-    return plan, allocation
-
-
-def generate_plan_with_hybrid(
-    symbol: str,
-    *,
-    total_equity: float,
-    shares: int = 200,
-    kline_count: int = 240,
-    cfg: GridConfig = DEFAULT_CONFIG,
-):
-    """便利函数：一次性完成 generate_plan + apply_hybrid_overlay。
-
-    用于 paper_daily / CLI 这种\"拿到 symbol + 账户总资产 → 要 plan +
-    分层建议\"的直接场景。未启用 hybrid 时 allocation 为 None。
-    """
-    context = load_market_context(
-        symbol, shares=shares, kline_count=kline_count, cfg=cfg
-    )
-    plan, frame = build_plan_with_frame(context, cfg=cfg)
-    plan, allocation = apply_hybrid_overlay(
-        plan, frame, total_equity=total_equity, cfg=cfg
-    )
-    return plan, allocation
