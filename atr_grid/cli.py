@@ -111,7 +111,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Multi-ETF HTML 已写出: {html_target}")
             for p in plans:
                 _maybe_notify(p, notify=args.notify, notify_always=args.notify_always)
-        return 0
+            return 0
+        print("没有成功生成任何计划，未写出 Dashboard。")
+        return 1
 
     if args.command == "backtest":
         cfg = for_profile(args.profile) if args.profile != "default" else DEFAULT_CONFIG
@@ -339,43 +341,12 @@ def _maybe_notify(plan, *, notify: bool, notify_always: bool) -> None:
 
 def _write_multi_html(plans: list) -> Path:
     """Write a combined multi-ETF HTML dashboard and a dated snapshot."""
-    from .report import render_html, _load_paper_state  # local import to avoid circular
+    from .dashboard import render_multi_dashboard
+    from .report import _load_paper_state  # local import to avoid circular
     from core.paths import project_path
 
     now_str = beijing_now_str()
     today = beijing_today_str()
-    sections = []
-    summary_rows = []
-
-    for plan in plans:
-        paper = _load_paper_state(plan.symbol)
-        single_html = render_html(plan, paper_state=paper)
-        body_start = single_html.find("<body")
-        body_end = single_html.rfind("</body>")
-        if body_start != -1 and body_end != -1:
-            body_inner = single_html[single_html.find(">", body_start) + 1:body_end]
-        else:
-            body_inner = single_html
-
-        action_color = "#22c55e" if "卖" not in plan.headline_action else "#f59e0b"
-        near_level = should_notify(plan)
-        alert_badge = ' <span style="background:#ef4444;color:#fff;padding:2px 6px;border-radius:4px;font-size:11px">⚡ 临近档位</span>' if near_level else ""
-        summary_rows.append(
-            f'<tr onclick="document.getElementById(\'sec-{plan.symbol}\').scrollIntoView({{behavior:\'smooth\'}})" style="cursor:pointer">'
-            f'<td style="font-weight:700;color:#60a5fa">{plan.symbol}</td>'
-            f'<td>¥{plan.current_price:.3f}</td>'
-            f'<td style="color:{action_color}">{plan.headline_action[:20]}{alert_badge}</td>'
-            f'<td>{"是" if plan.grid_enabled else "否"}</td>'
-            f'<td>{plan.last_trade_date}</td>'
-            f'</tr>'
-        )
-        sections.append(
-            f'<div id="sec-{plan.symbol}" style="margin-top:32px">'
-            f'<h2 style="color:#94a3b8;font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">'
-            f'▸ {plan.symbol}</h2>'
-            f'{body_inner}'
-            f'</div>'
-        )
 
     # Collect existing snapshots for the nav bar (scan output/snapshots/)
     snap_dir = project_path("output", "snapshots")
@@ -384,78 +355,32 @@ def _write_multi_html(plans: list) -> Path:
         [p.stem for p in snap_dir.glob("????-??-??.html") if p.stem != today],
         reverse=True,
     )[:30]  # keep last 30
-
-    # Build snapshot date picker
-    if existing_dates:
-        options = "".join(f'<option value="{d}">{d}</option>' for d in existing_dates)
-        snapshot_nav = f"""
-<div class="card" style="display:flex;align-items:center;gap:12px;padding:12px 20px">
-  <span style="color:#64748b;font-size:13px">📅 历史快照：</span>
-  <select id="snap-picker" onchange="window.location.href='snapshots/'+this.value+'.html'"
-    style="background:#0f172a;color:#94a3b8;border:1px solid #334155;border-radius:6px;padding:4px 8px;font-size:13px">
-    <option value="">— 选择日期 —</option>
-    {options}
-  </select>
-  <span style="color:#374151;font-size:11px;margin-left:auto">今日：{today}</span>
-</div>"""
-    else:
-        snapshot_nav = ""
-
-    summary_table = f"""
-<div class="card">
-  <div style="color:#94a3b8;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">
-    📊 多标的汇总 &nbsp;·&nbsp; 更新于 {now_str}
-  </div>
-  <table style="width:100%;border-collapse:collapse;font-size:14px">
-    <thead>
-      <tr style="color:#64748b;text-align:left">
-        <th style="padding:4px 8px">代码</th>
-        <th style="padding:4px 8px">当前价</th>
-        <th style="padding:4px 8px">当前动作</th>
-        <th style="padding:4px 8px">网格</th>
-        <th style="padding:4px 8px">交易日</th>
-      </tr>
-    </thead>
-    <tbody>
-      {"".join(summary_rows)}
-    </tbody>
-  </table>
-</div>"""
-
-    html = f"""<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ETF ATR 网格 · 多标的</title>
-<style>
-  * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-  body {{ background: #0f172a; color: #f1f5f9; font-family: -apple-system, "PingFang SC", sans-serif; padding: 16px; max-width: 900px; margin: 0 auto; }}
-  .card {{ background: #1e293b; border-radius: 14px; padding: 20px; margin-bottom: 16px; border: 1px solid #334155; }}
-  table td, table th {{ padding: 6px 8px; }}
-  table tbody tr:hover {{ background: #1e293b44; }}
-</style>
-</head>
-<body>
-{snapshot_nav}
-{summary_table}
-{"".join(sections)}
-<p style="color:#374151;font-size:11px;text-align:center;margin-top:24px">生成于 {now_str} · atr-grid</p>
-</body>
-</html>"""
+    paper_states = {plan.symbol: _load_paper_state(plan.symbol) for plan in plans}
+    near_level = {plan.symbol: should_notify(plan) for plan in plans}
+    html = render_multi_dashboard(
+        plans,
+        paper_states=paper_states,
+        near_level=near_level,
+        now_str=now_str,
+        today=today,
+        snapshot_dates=existing_dates,
+        snapshot_prefix="snapshots/",
+    )
 
     # Write main dashboard
     out_path = project_path("output", "atr_grid.html")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(html, encoding="utf-8")
 
-    # Write dated snapshot (uses relative path for snapshot links — same dir)
-    snap_html = html.replace(
-        "href='snapshots/",
-        "href='../snapshots/",
-    ).replace(
-        "<title>ETF ATR 网格 · 多标的</title>",
-        f"<title>ETF ATR 网格 {today}</title>",
+    # Write dated snapshot. It lives in output/snapshots/, so history links are one level up.
+    snap_html = render_multi_dashboard(
+        plans,
+        paper_states=paper_states,
+        near_level=near_level,
+        now_str=now_str,
+        today=today,
+        snapshot_dates=existing_dates,
+        snapshot_prefix="../snapshots/",
     )
     snap_path = snap_dir / f"{today}.html"
     snap_path.write_text(snap_html, encoding="utf-8")

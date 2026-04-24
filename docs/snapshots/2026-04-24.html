@@ -3,284 +3,406 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ETF ATR 网格 · 多标的</title>
+<title>ATR Grid Dev Dashboard</title>
 <style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: #0f172a; color: #f1f5f9; font-family: -apple-system, "PingFang SC", sans-serif; padding: 16px; max-width: 900px; margin: 0 auto; }
-  .card { background: #1e293b; border-radius: 14px; padding: 20px; margin-bottom: 16px; border: 1px solid #334155; }
-  table td, table th { padding: 6px 8px; }
-  table tbody tr:hover { background: #1e293b44; }
+  :root {
+    --bg: #f4f5f7;
+    --surface: #ffffff;
+    --ink: #161616;
+    --muted: #6b6f76;
+    --line: #d8dbe0;
+    --line-strong: #b8bec7;
+    --green: #0f8a5f;
+    --red: #c2413a;
+    --amber: #b7791f;
+    --blue: #2457c5;
+    --cyan: #087f8c;
+    --black: #0b0d10;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background:
+      linear-gradient(90deg, rgba(11,13,16,.04) 1px, transparent 1px),
+      linear-gradient(180deg, rgba(11,13,16,.035) 1px, transparent 1px),
+      var(--bg);
+    background-size: 28px 28px;
+    color: var(--ink);
+    font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", sans-serif;
+    font-size: 15px;
+    line-height: 1.45;
+  }
+  a { color: inherit; }
+  .shell { width: min(1220px, calc(100vw - 28px)); margin: 0 auto; padding: 18px 0 34px; }
+  .topbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 16px;
+    align-items: start;
+    padding: 18px 0 16px;
+    border-bottom: 2px solid var(--black);
+  }
+  h1 { margin: 0; font-size: 28px; line-height: 1.1; font-weight: 900; }
+  .subtitle { margin-top: 6px; color: var(--muted); font-size: 13px; }
+  .branch {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border: 1px solid var(--black);
+    border-radius: 999px;
+    background: var(--black);
+    color: #fff;
+    font-size: 12px;
+    font-weight: 800;
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); display: inline-block; }
+  .meta-line { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; color: var(--muted); font-size: 12px; }
+  .metrics {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+    margin: 16px 0;
+  }
+  .metric {
+    min-height: 78px;
+    padding: 12px 14px;
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    box-shadow: 0 1px 0 rgba(0,0,0,.05);
+  }
+  .metric-label { color: var(--muted); font-size: 12px; }
+  .metric-value { margin-top: 6px; font-size: 26px; font-weight: 900; line-height: 1; }
+  .metric-note { margin-top: 8px; color: var(--muted); font-size: 12px; }
+  .toolbar {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    align-items: center;
+    margin: 16px 0;
+  }
+  .snapshot {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  select {
+    height: 32px;
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    background: #fff;
+    color: var(--ink);
+    padding: 0 8px;
+    font: inherit;
+    font-size: 12px;
+  }
+  .table-wrap {
+    overflow-x: auto;
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+  }
+  table { width: 100%; border-collapse: collapse; min-width: 760px; }
+  th, td { padding: 10px 12px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th { color: var(--muted); font-size: 12px; font-weight: 800; background: #f9fafb; }
+  tr:last-child td { border-bottom: 0; }
+  tbody tr { cursor: pointer; }
+  tbody tr:hover { background: #f0f7f6; }
+  .symbol { font-weight: 900; color: var(--black); }
+  .price { font-variant-numeric: tabular-nums; font-weight: 800; }
+  .change-up { color: var(--green); }
+  .change-down { color: var(--red); }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--line-strong);
+    background: #fff;
+    color: var(--ink);
+    font-size: 12px;
+    font-weight: 800;
+    white-space: nowrap;
+  }
+  .chip.green { border-color: rgba(15,138,95,.35); color: var(--green); background: #eef9f4; }
+  .chip.red { border-color: rgba(194,65,58,.35); color: var(--red); background: #fff1ef; }
+  .chip.amber { border-color: rgba(183,121,31,.35); color: var(--amber); background: #fff7e8; }
+  .chip.blue { border-color: rgba(36,87,197,.35); color: var(--blue); background: #eef4ff; }
+  .section-title { margin: 24px 0 10px; font-size: 13px; color: var(--muted); font-weight: 900; }
+  .instrument {
+    scroll-margin-top: 14px;
+    margin-top: 14px;
+    background: var(--surface);
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    box-shadow: 0 1px 0 rgba(0,0,0,.05);
+  }
+  .instrument-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 14px;
+    padding: 16px;
+    border-bottom: 1px solid var(--line);
+  }
+  .instrument-title { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .instrument-title h2 { margin: 0; font-size: 22px; line-height: 1.1; }
+  .headline { margin-top: 8px; max-width: 760px; color: #30343a; font-weight: 700; }
+  .quote { text-align: right; }
+  .quote-price { font-size: 30px; font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; }
+  .quote-sub { margin-top: 6px; color: var(--muted); font-size: 12px; }
+  .instrument-body {
+    display: grid;
+    grid-template-columns: minmax(0, 1.1fr) minmax(320px, .9fr);
+    gap: 0;
+  }
+  .panel { padding: 16px; border-right: 1px solid var(--line); }
+  .panel:last-child { border-right: 0; }
+  .panel-title { margin-bottom: 10px; font-size: 12px; color: var(--muted); font-weight: 900; }
+  .action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .action-cell { border: 1px solid var(--line); border-radius: 6px; padding: 10px; min-height: 72px; }
+  .action-cell strong { display: block; margin-top: 4px; font-size: 22px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .steps { margin: 0; padding-left: 18px; color: #30343a; }
+  .steps li + li { margin-top: 6px; }
+  .band { position: relative; height: 22px; border-radius: 999px; background: linear-gradient(90deg, #fff1ef, #fff7e8 35%, #eef9f4 65%, #eef4ff); border: 1px solid var(--line-strong); margin: 10px 0 8px; }
+  .band-marker { position: absolute; top: -5px; width: 3px; height: 30px; border-radius: 3px; background: var(--black); }
+  .band-labels { display: flex; justify-content: space-between; color: var(--muted); font-size: 11px; }
+  .mini-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 14px; }
+  .mini { border-top: 2px solid var(--line-strong); padding-top: 8px; min-height: 54px; }
+  .mini span { display: block; color: var(--muted); font-size: 11px; }
+  .mini strong { display: block; margin-top: 4px; font-size: 15px; font-variant-numeric: tabular-nums; }
+  .ladder { margin-top: 14px; display: grid; gap: 8px; }
+  .rung { display: grid; grid-template-columns: 50px 1fr 1fr auto; gap: 8px; align-items: center; min-height: 38px; border: 1px solid var(--line); border-radius: 6px; padding: 8px; }
+  .rung.current { border-color: rgba(183,121,31,.55); background: #fffaf0; }
+  .rung.passed { border-color: rgba(15,138,95,.35); background: #f3fbf7; }
+  .rung-label { color: var(--muted); font-size: 12px; font-weight: 800; }
+  .warn-list { margin: 12px 0 0; padding-left: 18px; color: var(--red); }
+  .footer { margin: 22px 0 0; color: var(--muted); font-size: 12px; text-align: center; }
+  @media (max-width: 860px) {
+    .topbar, .instrument-head, .instrument-body { grid-template-columns: 1fr; }
+    .quote, .meta-line { text-align: left; justify-content: flex-start; }
+    .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .panel { border-right: 0; border-bottom: 1px solid var(--line); }
+    .panel:last-child { border-bottom: 0; }
+  }
+  @media (max-width: 560px) {
+    .shell { width: min(100vw - 18px, 1220px); padding-top: 8px; }
+    h1 { font-size: 23px; }
+    .metrics, .action-grid, .mini-grid { grid-template-columns: 1fr; }
+    .toolbar { align-items: flex-start; flex-direction: column; }
+    .rung { grid-template-columns: 42px 1fr; }
+    .rung-status { grid-column: 2; }
+  }
 </style>
 </head>
 <body>
-
-
-<div class="card">
-  <div style="color:#94a3b8;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">
-    📊 多标的汇总 &nbsp;·&nbsp; 更新于 2026-04-24 02:09
-  </div>
-  <table style="width:100%;border-collapse:collapse;font-size:14px">
-    <thead>
-      <tr style="color:#64748b;text-align:left">
-        <th style="padding:4px 8px">代码</th>
-        <th style="padding:4px 8px">当前价</th>
-        <th style="padding:4px 8px">当前动作</th>
-        <th style="padding:4px 8px">网格</th>
-        <th style="padding:4px 8px">交易日</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr onclick="document.getElementById('sec-SH515880').scrollIntoView({behavior:'smooth'})" style="cursor:pointer"><td style="font-weight:700;color:#60a5fa">SH515880</td><td>¥1.344</td><td style="color:#f59e0b">保留大部分底仓，只把 200 股机动仓在</td><td>否</td><td>2026-04-24</td></tr><tr onclick="document.getElementById('sec-SH513500').scrollIntoView({behavior:'smooth'})" style="cursor:pointer"><td style="font-weight:700;color:#60a5fa">SH513500</td><td>¥2.368</td><td style="color:#22c55e">只动 400 股机动仓做区间来回，不碰大 <span style="background:#ef4444;color:#fff;padding:2px 6px;border-radius:4px;font-size:11px">⚡ 临近档位</span></td><td>是</td><td>2026-04-24</td></tr><tr onclick="document.getElementById('sec-SZ159915').scrollIntoView({behavior:'smooth'})" style="cursor:pointer"><td style="font-weight:700;color:#60a5fa">SZ159915</td><td>¥3.659</td><td style="color:#f59e0b">保留大部分底仓，只把 200 股机动仓在</td><td>否</td><td>2026-04-24</td></tr>
-    </tbody>
-  </table>
-</div>
-<div id="sec-SH515880" style="margin-top:32px"><h2 style="color:#94a3b8;font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">▸ SH515880</h2>
-
-<!-- Header -->
-<div class="card">
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px">
+<main class="shell">
+  <header class="topbar">
     <div>
-      <div style="font-size:13px;color:#64748b;margin-bottom:4px">SH515880</div>
-      <div style="font-size:30px;font-weight:800;color:#f8fafc;letter-spacing:-1px">
-        ¥1.344
-        <span style="color:#22c55e;font-size:14px;margin-left:8px">+0.00%</span>
-      </div>
-      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
-        <span style="background:#1f2937;color:#6b7280;padding:3px 10px;border-radius:12px;font-size:13px;font-weight:600;border:1px solid #6b728040">多头趋势</span>
-        <span style="background:#431407;color:#fb923c;padding:3px 10px;border-radius:12px;font-size:13px;font-weight:600;border:1px solid #fb923c40">上涨中先卖一小部分</span>
-      </div>
+      <span class="branch"><span class="dot"></span> DEV BRANCH</span>
+      <h1>ATR Grid Control Board</h1>
+      <div class="subtitle">多标的网格决策盘 · 只显示可执行信号、风险边界和纸面账本状态</div>
     </div>
-    <div style="text-align:right">
-      <div class="meta">最后交易日</div>
-      <div style="color:#94a3b8;font-size:14px">2026-04-24</div>
-      <div class="meta" style="margin-top:4px">更新于 2026-04-24 02:09</div>
-      <div class="meta">来源: api</div>
+    <div class="meta-line">
+      <span>生成 2026-04-24 02:09</span>
+      <span>数据日 2026-04-24</span>
     </div>
+  </header>
+
+  <section class="metrics" aria-label="dashboard metrics">
+    <div class="metric"><div class="metric-label">监控标的</div><div class="metric-value">3</div><div class="metric-note">当前分支配置</div></div>
+    <div class="metric"><div class="metric-label">临近档位</div><div class="metric-value">1</div><div class="metric-note">触发 Server 酱阈值</div></div>
+    <div class="metric"><div class="metric-label">网格启用</div><div class="metric-value">1</div><div class="metric-note">可执行区间交易</div></div>
+    <div class="metric"><div class="metric-label">弱势观望</div><div class="metric-value">0</div><div class="metric-note">trend_down 计数</div></div>
+  </section>
+
+  <div class="toolbar">
+    <div class="section-title">汇总</div>
+
+    <label class="snapshot">
+      历史快照
+      <select onchange="if(this.value) window.location.href='../snapshots/'+this.value+'.html'">
+        <option value="">选择日期</option>
+        <option value="2026-04-23">2026-04-23</option>
+      </select>
+    </label>
   </div>
-</div>
 
-<!-- Action Card -->
-<div class="card" style="border-color:#f97316aa">
-  <div style="color:#fb923c;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">📋 下一步操作</div>
-  <div style="font-size:17px;color:#fef3c7;font-weight:600;line-height:1.5">保留大部分底仓，只把 200 股机动仓在 ¥1.446 附近先卖掉，若回落到 ¥1.396 左右再接回。</div>
-  <div style="display:flex;gap:20px;margin-top:16px;flex-wrap:wrap"><div style="background:#1c2a3a;border-radius:10px;padding:14px 20px;min-width:120px"><div style="color:#60a5fa;font-size:12px;margin-bottom:4px">建议卖出</div><div style="color:#fb923c;font-size:22px;font-weight:700">200 股</div><div style="color:#9ca3af;font-size:12px">在 ¥1.446 +7.59%</div></div><div style="background:#1c2a3a;border-radius:10px;padding:14px 20px;min-width:120px"><div style="color:#60a5fa;font-size:12px;margin-bottom:4px">接回价位</div><div style="color:#22c55e;font-size:22px;font-weight:700">¥1.396</div><div style="color:#9ca3af;font-size:12px">回落后接</div></div></div>
-  <div style="margin-top:16px;padding-top:16px;border-top:1px solid #374151">
-    <p style="margin:8px 0;color:#d1d5db;line-height:1.6">第1步：在 ¥1.446 附近先卖出 200 股机动仓，先把一部分利润落袋。</p><p style="margin:8px 0;color:#d1d5db;line-height:1.6">第2步：如果回落到 ¥1.396 左右，再把这 200 股接回来。</p><p style="margin:8px 0;color:#d1d5db;line-height:1.6">第3步：若后续明显走弱并逼近 ¥0.938 下方，停止用这套上涨回接思路。</p>
-  </div>
-</div>
+  <section class="table-wrap" aria-label="symbol summary">
+    <table>
+      <thead>
+        <tr>
+          <th>代码</th>
+          <th>价格</th>
+          <th>状态</th>
+          <th>主卖</th>
+          <th>主买</th>
+          <th>动作</th>
+          <th>交易日</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr onclick="document.getElementById('sec-SH515880').scrollIntoView({behavior:'smooth'})"><td><span class="symbol">SH515880</span></td><td><span class="price">¥1.344</span> <span class="change-up">+0.00%</span></td><td><span class="chip green">多头趋势</span><span class="chip amber">锁利</span><span class="chip amber">网格暂停</span></td><td>¥1.446</td><td>¥1.396</td><td>保留大部分底仓，只把 200 股机动仓在 ¥1.446 附近先卖掉，...</td><td>2026-04-24</td></tr>
+<tr onclick="document.getElementById('sec-SH513500').scrollIntoView({behavior:'smooth'})"><td><span class="symbol">SH513500</span></td><td><span class="price">¥2.368</span> <span class="change-up">+0.00%</span></td><td><span class="chip blue">震荡区间</span><span class="chip blue">网格</span><span class="chip red">临近档位</span></td><td>¥2.399</td><td>¥2.251</td><td>只动 400 股机动仓做区间来回，不碰大部分底仓。</td><td>2026-04-24</td></tr>
+<tr onclick="document.getElementById('sec-SZ159915').scrollIntoView({behavior:'smooth'})"><td><span class="symbol">SZ159915</span></td><td><span class="price">¥3.659</span> <span class="change-up">+0.00%</span></td><td><span class="chip green">多头趋势</span><span class="chip amber">锁利</span><span class="chip amber">网格暂停</span></td><td>¥3.874</td><td>¥3.782</td><td>保留大部分底仓，只把 200 股机动仓在 ¥3.874 附近先卖掉，...</td><td>2026-04-24</td></tr>
+      </tbody>
+    </table>
+  </section>
 
-<!-- Sell Ladder -->
-<div class="card">
-  <div style="color:#94a3b8;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">
-    📊 卖出梯队（参考 2000 股模板 · 每档 200 股）
-  </div>
-  <table>
-    <thead>
-      <tr style="background:#111827">
-        <th style="padding:8px 14px;color:#6b7280;font-weight:500;text-align:left;font-size:12px">档位</th>
-        <th style="padding:8px 14px;color:#6b7280;font-weight:500;text-align:left;font-size:12px">卖出价</th>
-        <th style="padding:8px 14px;color:#6b7280;font-weight:500;text-align:left;font-size:12px">较现价</th>
-        <th style="padding:8px 14px;color:#6b7280;font-weight:500;text-align:left;font-size:12px">接回价</th>
-        <th style="padding:8px 14px;color:#6b7280;font-weight:500;text-align:left;font-size:12px">状态</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr style="background:#431407;border-left:3px solid #f97316"><td style="padding:10px 14px;color:#9ca3af">第1档</td><td style="padding:10px 14px;color:#f3f4f6;font-weight:600;font-size:16px">¥1.446</td><td style="padding:10px 14px;color:#22c55e">+7.59%</td><td style="padding:10px 14px;color:#60a5fa">¥1.396</td><td style="padding:10px 14px"><span style="color:#fb923c;font-weight:700;font-size:12px">▶ 当前</span></td></tr>
-<tr style="background:#111827;border-left:3px solid transparent"><td style="padding:10px 14px;color:#9ca3af">第2档</td><td style="padding:10px 14px;color:#f3f4f6;font-weight:600;font-size:16px">¥1.496</td><td style="padding:10px 14px;color:#22c55e">+11.31%</td><td style="padding:10px 14px;color:#60a5fa">¥1.446</td><td style="padding:10px 14px"><span style="color:#374151;font-size:12px">等待</span></td></tr>
-<tr style="background:#111827;border-left:3px solid transparent"><td style="padding:10px 14px;color:#9ca3af">第3档</td><td style="padding:10px 14px;color:#f3f4f6;font-weight:600;font-size:16px">¥1.547</td><td style="padding:10px 14px;color:#22c55e">+15.10%</td><td style="padding:10px 14px;color:#60a5fa">¥1.497</td><td style="padding:10px 14px"><span style="color:#374151;font-size:12px">等待</span></td></tr>
-    </tbody>
-  </table>
-</div>
+  <div class="section-title">标的详情</div>
 
-<!-- Indicators + Risk -->
-<div class="two-col" style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-  <div class="card"><div style="color:#94a3b8;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">📈 技术指标</div><div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1e293b"><span style="color:#64748b;font-size:13px">MA20</span><span style="color:#e2e8f0;font-size:13px;font-weight:600">¥1.217</span></div><div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1e293b"><span style="color:#64748b;font-size:13px">MA60</span><span style="color:#e2e8f0;font-size:13px;font-weight:600">¥1.118</span></div><div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1e293b"><span style="color:#64748b;font-size:13px">ATR14</span><span style="color:#e2e8f0;font-size:13px;font-weight:600">¥0.050</span></div><div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1e293b"><span style="color:#64748b;font-size:13px">BB上轨</span><span style="color:#e2e8f0;font-size:13px;font-weight:600">¥1.446</span></div><div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1e293b"><span style="color:#64748b;font-size:13px">BB中轨</span><span style="color:#e2e8f0;font-size:13px;font-weight:600">¥1.217</span></div><div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1e293b"><span style="color:#64748b;font-size:13px">BB下轨</span><span style="color:#e2e8f0;font-size:13px;font-weight:600">¥0.988</span></div></div>
-  <div class="card">
-  <div style="color:#94a3b8;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">⚠️ 风险边界</div>
-  <div style="margin-bottom:16px;padding:14px;background:#450a0a;border-radius:10px;border:1px solid #7f1d1d">
-    <div style="color:#f87171;font-size:12px;margin-bottom:4px">下沿失效（止损线）</div>
-    <div style="color:#fca5a5;font-size:24px;font-weight:700">¥0.938</div>
-  </div>
-  <div style="padding:14px;background:#14532d;border-radius:10px;border:1px solid #166534">
-    <div style="color:#4ade80;font-size:12px;margin-bottom:4px">上沿突破（趋势确认）</div>
-    <div style="color:#86efac;font-size:24px;font-weight:700">¥1.496</div>
-  </div>
-</div>
-</div>
-
-
-
-
-<!-- Footer -->
-<div style="text-align:center;margin-top:20px;color:#374151;font-size:12px">
-  ATR Grid MVP · SH515880 · 2026-04-24 02:09
-</div>
-
-</div><div id="sec-SH513500" style="margin-top:32px"><h2 style="color:#94a3b8;font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">▸ SH513500</h2>
-
-<!-- Header -->
-<div class="card">
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px">
-    <div>
-      <div style="font-size:13px;color:#64748b;margin-bottom:4px">SH513500</div>
-      <div style="font-size:30px;font-weight:800;color:#f8fafc;letter-spacing:-1px">
-        ¥2.368
-        <span style="color:#22c55e;font-size:14px;margin-left:8px">+0.00%</span>
+  <article class="instrument" id="sec-SH515880">
+    <div class="instrument-head">
+      <div>
+        <div class="instrument-title">
+          <h2>SH515880</h2>
+          <span class="chip green">多头趋势</span><span class="chip amber">锁利</span><span class="chip amber">网格暂停</span>
+        </div>
+        <div class="headline">保留大部分底仓，只把 200 股机动仓在 ¥1.446 附近先卖掉，若回落到 ¥1.396 左右再接回。</div>
       </div>
-      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
-        <span style="background:#1f2937;color:#6b7280;padding:3px 10px;border-radius:12px;font-size:13px;font-weight:600;border:1px solid #6b728040">震荡区间</span>
-        <span style="background:#0c1a40;color:#60a5fa;padding:3px 10px;border-radius:12px;font-size:13px;font-weight:600;border:1px solid #60a5fa40">区间网格</span>
+      <div class="quote">
+        <div class="quote-price">¥1.344</div>
+        <div class="quote-sub"><span class="change-up">+0.00%</span> · tracked snapshot · 2026-04-24</div>
       </div>
     </div>
-    <div style="text-align:right">
-      <div class="meta">最后交易日</div>
-      <div style="color:#94a3b8;font-size:14px">2026-04-24</div>
-      <div class="meta" style="margin-top:4px">更新于 2026-04-24 02:09</div>
-      <div class="meta">来源: api</div>
+    <div class="instrument-body">
+      <section class="panel">
+        <div class="panel-title">执行面板</div>
+        <div class="action-grid">
+          <div class="action-cell"><span>主卖点</span><strong class="change-down">¥1.446</strong></div>
+          <div class="action-cell"><span>主买点</span><strong class="change-up">¥1.396</strong></div>
+        </div>
+        <ol class="steps"><li>在 ¥1.446 附近先卖出 200 股机动仓，先把一部分利润落袋。</li><li>如果回落到 ¥1.396 左右，再把这 200 股接回来。</li><li>若后续明显走弱并逼近 ¥0.938 下方，停止用这套上涨回接思路。</li></ol>
+
+        <div class="panel-title" style="margin-top:16px">卖出梯队</div><div class="ladder"><div class="rung current"><div class="rung-label">L1</div><div><span>卖出</span><strong>¥1.446</strong></div><div><span>接回</span><strong>¥1.396</strong></div><div class="rung-status"><span class="chip">当前</span></div></div><div class="rung "><div class="rung-label">L2</div><div><span>卖出</span><strong>¥1.496</strong></div><div><span>接回</span><strong>¥1.446</strong></div><div class="rung-status"><span class="chip">等待</span></div></div><div class="rung "><div class="rung-label">L3</div><div><span>卖出</span><strong>¥1.547</strong></div><div><span>接回</span><strong>¥1.497</strong></div><div class="rung-status"><span class="chip">等待</span></div></div></div>
+      </section>
+      <section class="panel">
+        <div class="panel-title">价格结构</div>
+
+        <div class="band" aria-label="price position in Bollinger band">
+          <div class="band-marker" style="left:calc(77.73% - 1px)"></div>
+        </div>
+        <div class="band-labels">
+          <span>下轨 ¥0.988</span>
+          <span>现价 ¥1.344</span>
+          <span>上轨 ¥1.446</span>
+        </div>
+        <div class="mini-grid">
+          <div class="mini"><span>MA20</span><strong>¥1.217</strong></div>
+          <div class="mini"><span>MA60</span><strong>¥1.118</strong></div>
+          <div class="mini"><span>ATR14</span><strong>¥0.050</strong></div>
+          <div class="mini"><span>下沿失效</span><strong class="change-down">¥0.938</strong></div>
+          <div class="mini"><span>上沿突破</span><strong class="change-up">¥1.496</strong></div>
+          <div class="mini"><span>模板</span><strong>2000 / 200</strong></div>
+        </div>
+
+      </section>
     </div>
-  </div>
-</div>
+  </article>
 
-<!-- Action Card -->
-<div class="card" style="border-color:#f97316aa">
-  <div style="color:#fb923c;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">📋 下一步操作</div>
-  <div style="font-size:17px;color:#fef3c7;font-weight:600;line-height:1.5">只动 400 股机动仓做区间来回，不碰大部分底仓。</div>
-  <div style="display:flex;gap:20px;margin-top:16px;flex-wrap:wrap"><div style="background:#1c2a3a;border-radius:10px;padding:14px 20px;min-width:120px"><div style="color:#60a5fa;font-size:12px;margin-bottom:4px">建议卖出</div><div style="color:#fb923c;font-size:22px;font-weight:700">600 股</div><div style="color:#9ca3af;font-size:12px">在 ¥2.399 +1.31%</div></div><div style="background:#1c2a3a;border-radius:10px;padding:14px 20px;min-width:120px"><div style="color:#60a5fa;font-size:12px;margin-bottom:4px">接回价位</div><div style="color:#22c55e;font-size:22px;font-weight:700">¥2.251</div><div style="color:#9ca3af;font-size:12px">回落后接</div></div></div>
-  <div style="margin-top:16px;padding-top:16px;border-top:1px solid #374151">
-    <p style="margin:8px 0;color:#d1d5db;line-height:1.6">第1步：若价格触及 ¥2.399，先卖出 400 股机动仓。</p><p style="margin:8px 0;color:#d1d5db;line-height:1.6">第2步：若价格回落到 ¥2.251 左右，再把这 400 股买回。</p><p style="margin:8px 0;color:#d1d5db;line-height:1.6">第3步：若跌破 ¥2.112，先停掉这轮区间交易。</p>
-  </div>
-</div>
-
-<!-- Sell Ladder -->
-<div class="card">
-  <div style="color:#94a3b8;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">
-    📊 卖出梯队（参考 2000 股模板 · 每档 200 股）
-  </div>
-  <table>
-    <thead>
-      <tr style="background:#111827">
-        <th style="padding:8px 14px;color:#6b7280;font-weight:500;text-align:left;font-size:12px">档位</th>
-        <th style="padding:8px 14px;color:#6b7280;font-weight:500;text-align:left;font-size:12px">卖出价</th>
-        <th style="padding:8px 14px;color:#6b7280;font-weight:500;text-align:left;font-size:12px">较现价</th>
-        <th style="padding:8px 14px;color:#6b7280;font-weight:500;text-align:left;font-size:12px">接回价</th>
-        <th style="padding:8px 14px;color:#6b7280;font-weight:500;text-align:left;font-size:12px">状态</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr style="background:#431407;border-left:3px solid #f97316"><td style="padding:10px 14px;color:#9ca3af">第1档</td><td style="padding:10px 14px;color:#f3f4f6;font-weight:600;font-size:16px">¥2.399</td><td style="padding:10px 14px;color:#22c55e">+1.31%</td><td style="padding:10px 14px;color:#60a5fa">¥2.371</td><td style="padding:10px 14px"><span style="color:#fb923c;font-weight:700;font-size:12px">▶ 当前</span></td></tr>
-<tr style="background:#111827;border-left:3px solid transparent"><td style="padding:10px 14px;color:#9ca3af">第2档</td><td style="padding:10px 14px;color:#f3f4f6;font-weight:600;font-size:16px">¥2.427</td><td style="padding:10px 14px;color:#22c55e">+2.49%</td><td style="padding:10px 14px;color:#60a5fa">¥2.399</td><td style="padding:10px 14px"><span style="color:#374151;font-size:12px">等待</span></td></tr>
-<tr style="background:#111827;border-left:3px solid transparent"><td style="padding:10px 14px;color:#9ca3af">第3档</td><td style="padding:10px 14px;color:#f3f4f6;font-weight:600;font-size:16px">¥2.454</td><td style="padding:10px 14px;color:#22c55e">+3.63%</td><td style="padding:10px 14px;color:#60a5fa">¥2.426</td><td style="padding:10px 14px"><span style="color:#374151;font-size:12px">等待</span></td></tr>
-    </tbody>
-  </table>
-</div>
-
-<!-- Indicators + Risk -->
-<div class="two-col" style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-  <div class="card"><div style="color:#94a3b8;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">📈 技术指标</div><div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1e293b"><span style="color:#64748b;font-size:13px">MA20</span><span style="color:#e2e8f0;font-size:13px;font-weight:600">¥2.288</span></div><div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1e293b"><span style="color:#64748b;font-size:13px">MA60</span><span style="color:#e2e8f0;font-size:13px;font-weight:600">¥2.325</span></div><div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1e293b"><span style="color:#64748b;font-size:13px">ATR14</span><span style="color:#e2e8f0;font-size:13px;font-weight:600">¥0.028</span></div><div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1e293b"><span style="color:#64748b;font-size:13px">BB上轨</span><span style="color:#e2e8f0;font-size:13px;font-weight:600">¥2.436</span></div><div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1e293b"><span style="color:#64748b;font-size:13px">BB中轨</span><span style="color:#e2e8f0;font-size:13px;font-weight:600">¥2.288</span></div><div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1e293b"><span style="color:#64748b;font-size:13px">BB下轨</span><span style="color:#e2e8f0;font-size:13px;font-weight:600">¥2.140</span></div></div>
-  <div class="card">
-  <div style="color:#94a3b8;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">⚠️ 风险边界</div>
-  <div style="margin-bottom:16px;padding:14px;background:#450a0a;border-radius:10px;border:1px solid #7f1d1d">
-    <div style="color:#f87171;font-size:12px;margin-bottom:4px">下沿失效（止损线）</div>
-    <div style="color:#fca5a5;font-size:24px;font-weight:700">¥2.112</div>
-  </div>
-  <div style="padding:14px;background:#14532d;border-radius:10px;border:1px solid #166534">
-    <div style="color:#4ade80;font-size:12px;margin-bottom:4px">上沿突破（趋势确认）</div>
-    <div style="color:#86efac;font-size:24px;font-weight:700">¥2.464</div>
-  </div>
-</div>
-</div>
-
-
-
-
-<!-- Footer -->
-<div style="text-align:center;margin-top:20px;color:#374151;font-size:12px">
-  ATR Grid MVP · SH513500 · 2026-04-24 02:09
-</div>
-
-</div><div id="sec-SZ159915" style="margin-top:32px"><h2 style="color:#94a3b8;font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">▸ SZ159915</h2>
-
-<!-- Header -->
-<div class="card">
-  <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px">
-    <div>
-      <div style="font-size:13px;color:#64748b;margin-bottom:4px">SZ159915</div>
-      <div style="font-size:30px;font-weight:800;color:#f8fafc;letter-spacing:-1px">
-        ¥3.659
-        <span style="color:#22c55e;font-size:14px;margin-left:8px">+0.00%</span>
+  <article class="instrument" id="sec-SH513500">
+    <div class="instrument-head">
+      <div>
+        <div class="instrument-title">
+          <h2>SH513500</h2>
+          <span class="chip blue">震荡区间</span><span class="chip blue">网格</span><span class="chip red">临近档位</span>
+        </div>
+        <div class="headline">只动 400 股机动仓做区间来回，不碰大部分底仓。</div>
       </div>
-      <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
-        <span style="background:#1f2937;color:#6b7280;padding:3px 10px;border-radius:12px;font-size:13px;font-weight:600;border:1px solid #6b728040">多头趋势</span>
-        <span style="background:#431407;color:#fb923c;padding:3px 10px;border-radius:12px;font-size:13px;font-weight:600;border:1px solid #fb923c40">上涨中先卖一小部分</span>
+      <div class="quote">
+        <div class="quote-price">¥2.368</div>
+        <div class="quote-sub"><span class="change-up">+0.00%</span> · tracked snapshot · 2026-04-24</div>
       </div>
     </div>
-    <div style="text-align:right">
-      <div class="meta">最后交易日</div>
-      <div style="color:#94a3b8;font-size:14px">2026-04-24</div>
-      <div class="meta" style="margin-top:4px">更新于 2026-04-24 02:09</div>
-      <div class="meta">来源: api</div>
+    <div class="instrument-body">
+      <section class="panel">
+        <div class="panel-title">执行面板</div>
+        <div class="action-grid">
+          <div class="action-cell"><span>主卖点</span><strong class="change-down">¥2.399</strong></div>
+          <div class="action-cell"><span>主买点</span><strong class="change-up">¥2.251</strong></div>
+        </div>
+        <ol class="steps"><li>若价格触及 ¥2.399，先卖出 400 股机动仓。</li><li>若价格回落到 ¥2.251 左右，再把这 400 股买回。</li><li>若跌破 ¥2.112，先停掉这轮区间交易。</li></ol>
+
+        <div class="panel-title" style="margin-top:16px">卖出梯队</div><div class="ladder"><div class="rung current"><div class="rung-label">L1</div><div><span>卖出</span><strong>¥2.399</strong></div><div><span>接回</span><strong>¥2.371</strong></div><div class="rung-status"><span class="chip">当前</span></div></div><div class="rung "><div class="rung-label">L2</div><div><span>卖出</span><strong>¥2.427</strong></div><div><span>接回</span><strong>¥2.399</strong></div><div class="rung-status"><span class="chip">等待</span></div></div><div class="rung "><div class="rung-label">L3</div><div><span>卖出</span><strong>¥2.454</strong></div><div><span>接回</span><strong>¥2.426</strong></div><div class="rung-status"><span class="chip">等待</span></div></div></div>
+      </section>
+      <section class="panel">
+        <div class="panel-title">价格结构</div>
+
+        <div class="band" aria-label="price position in Bollinger band">
+          <div class="band-marker" style="left:calc(77.03% - 1px)"></div>
+        </div>
+        <div class="band-labels">
+          <span>下轨 ¥2.140</span>
+          <span>现价 ¥2.368</span>
+          <span>上轨 ¥2.436</span>
+        </div>
+        <div class="mini-grid">
+          <div class="mini"><span>MA20</span><strong>¥2.288</strong></div>
+          <div class="mini"><span>MA60</span><strong>¥2.325</strong></div>
+          <div class="mini"><span>ATR14</span><strong>¥0.028</strong></div>
+          <div class="mini"><span>下沿失效</span><strong class="change-down">¥2.112</strong></div>
+          <div class="mini"><span>上沿突破</span><strong class="change-up">¥2.464</strong></div>
+          <div class="mini"><span>模板</span><strong>2000 / 200</strong></div>
+        </div>
+
+      </section>
     </div>
-  </div>
-</div>
+  </article>
 
-<!-- Action Card -->
-<div class="card" style="border-color:#f97316aa">
-  <div style="color:#fb923c;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:10px">📋 下一步操作</div>
-  <div style="font-size:17px;color:#fef3c7;font-weight:600;line-height:1.5">保留大部分底仓，只把 200 股机动仓在 ¥3.874 附近先卖掉，若回落到 ¥3.782 左右再接回。</div>
-  <div style="display:flex;gap:20px;margin-top:16px;flex-wrap:wrap"><div style="background:#1c2a3a;border-radius:10px;padding:14px 20px;min-width:120px"><div style="color:#60a5fa;font-size:12px;margin-bottom:4px">建议卖出</div><div style="color:#fb923c;font-size:22px;font-weight:700">200 股</div><div style="color:#9ca3af;font-size:12px">在 ¥3.874 +5.88%</div></div><div style="background:#1c2a3a;border-radius:10px;padding:14px 20px;min-width:120px"><div style="color:#60a5fa;font-size:12px;margin-bottom:4px">接回价位</div><div style="color:#22c55e;font-size:22px;font-weight:700">¥3.782</div><div style="color:#9ca3af;font-size:12px">回落后接</div></div></div>
-  <div style="margin-top:16px;padding-top:16px;border-top:1px solid #374151">
-    <p style="margin:8px 0;color:#d1d5db;line-height:1.6">第1步：在 ¥3.874 附近先卖出 200 股机动仓，先把一部分利润落袋。</p><p style="margin:8px 0;color:#d1d5db;line-height:1.6">第2步：如果回落到 ¥3.782 左右，再把这 200 股接回来。</p><p style="margin:8px 0;color:#d1d5db;line-height:1.6">第3步：若后续明显走弱并逼近 ¥2.919 下方，停止用这套上涨回接思路。</p>
-  </div>
-</div>
+  <article class="instrument" id="sec-SZ159915">
+    <div class="instrument-head">
+      <div>
+        <div class="instrument-title">
+          <h2>SZ159915</h2>
+          <span class="chip green">多头趋势</span><span class="chip amber">锁利</span><span class="chip amber">网格暂停</span>
+        </div>
+        <div class="headline">保留大部分底仓，只把 200 股机动仓在 ¥3.874 附近先卖掉，若回落到 ¥3.782 左右再接回。</div>
+      </div>
+      <div class="quote">
+        <div class="quote-price">¥3.659</div>
+        <div class="quote-sub"><span class="change-up">+0.00%</span> · tracked snapshot · 2026-04-24</div>
+      </div>
+    </div>
+    <div class="instrument-body">
+      <section class="panel">
+        <div class="panel-title">执行面板</div>
+        <div class="action-grid">
+          <div class="action-cell"><span>主卖点</span><strong class="change-down">¥3.874</strong></div>
+          <div class="action-cell"><span>主买点</span><strong class="change-up">¥3.782</strong></div>
+        </div>
+        <ol class="steps"><li>在 ¥3.874 附近先卖出 200 股机动仓，先把一部分利润落袋。</li><li>如果回落到 ¥3.782 左右，再把这 200 股接回来。</li><li>若后续明显走弱并逼近 ¥2.919 下方，停止用这套上涨回接思路。</li></ol>
 
-<!-- Sell Ladder -->
-<div class="card">
-  <div style="color:#94a3b8;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">
-    📊 卖出梯队（参考 2000 股模板 · 每档 200 股）
-  </div>
-  <table>
-    <thead>
-      <tr style="background:#111827">
-        <th style="padding:8px 14px;color:#6b7280;font-weight:500;text-align:left;font-size:12px">档位</th>
-        <th style="padding:8px 14px;color:#6b7280;font-weight:500;text-align:left;font-size:12px">卖出价</th>
-        <th style="padding:8px 14px;color:#6b7280;font-weight:500;text-align:left;font-size:12px">较现价</th>
-        <th style="padding:8px 14px;color:#6b7280;font-weight:500;text-align:left;font-size:12px">接回价</th>
-        <th style="padding:8px 14px;color:#6b7280;font-weight:500;text-align:left;font-size:12px">状态</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr style="background:#431407;border-left:3px solid #f97316"><td style="padding:10px 14px;color:#9ca3af">第1档</td><td style="padding:10px 14px;color:#f3f4f6;font-weight:600;font-size:16px">¥3.874</td><td style="padding:10px 14px;color:#22c55e">+5.88%</td><td style="padding:10px 14px;color:#60a5fa">¥3.782</td><td style="padding:10px 14px"><span style="color:#fb923c;font-weight:700;font-size:12px">▶ 当前</span></td></tr>
-<tr style="background:#111827;border-left:3px solid transparent"><td style="padding:10px 14px;color:#9ca3af">第2档</td><td style="padding:10px 14px;color:#f3f4f6;font-weight:600;font-size:16px">¥3.966</td><td style="padding:10px 14px;color:#22c55e">+8.39%</td><td style="padding:10px 14px;color:#60a5fa">¥3.874</td><td style="padding:10px 14px"><span style="color:#374151;font-size:12px">等待</span></td></tr>
-<tr style="background:#111827;border-left:3px solid transparent"><td style="padding:10px 14px;color:#9ca3af">第3档</td><td style="padding:10px 14px;color:#f3f4f6;font-weight:600;font-size:16px">¥4.058</td><td style="padding:10px 14px;color:#22c55e">+10.90%</td><td style="padding:10px 14px;color:#60a5fa">¥3.966</td><td style="padding:10px 14px"><span style="color:#374151;font-size:12px">等待</span></td></tr>
-    </tbody>
-  </table>
-</div>
+        <div class="panel-title" style="margin-top:16px">卖出梯队</div><div class="ladder"><div class="rung current"><div class="rung-label">L1</div><div><span>卖出</span><strong>¥3.874</strong></div><div><span>接回</span><strong>¥3.782</strong></div><div class="rung-status"><span class="chip">当前</span></div></div><div class="rung "><div class="rung-label">L2</div><div><span>卖出</span><strong>¥3.966</strong></div><div><span>接回</span><strong>¥3.874</strong></div><div class="rung-status"><span class="chip">等待</span></div></div><div class="rung "><div class="rung-label">L3</div><div><span>卖出</span><strong>¥4.058</strong></div><div><span>接回</span><strong>¥3.966</strong></div><div class="rung-status"><span class="chip">等待</span></div></div></div>
+      </section>
+      <section class="panel">
+        <div class="panel-title">价格结构</div>
 
-<!-- Indicators + Risk -->
-<div class="two-col" style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
-  <div class="card"><div style="color:#94a3b8;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">📈 技术指标</div><div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1e293b"><span style="color:#64748b;font-size:13px">MA20</span><span style="color:#e2e8f0;font-size:13px;font-weight:600">¥3.442</span></div><div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1e293b"><span style="color:#64748b;font-size:13px">MA60</span><span style="color:#e2e8f0;font-size:13px;font-weight:600">¥3.339</span></div><div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1e293b"><span style="color:#64748b;font-size:13px">ATR14</span><span style="color:#e2e8f0;font-size:13px;font-weight:600">¥0.092</span></div><div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1e293b"><span style="color:#64748b;font-size:13px">BB上轨</span><span style="color:#e2e8f0;font-size:13px;font-weight:600">¥3.874</span></div><div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1e293b"><span style="color:#64748b;font-size:13px">BB中轨</span><span style="color:#e2e8f0;font-size:13px;font-weight:600">¥3.442</span></div><div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1e293b"><span style="color:#64748b;font-size:13px">BB下轨</span><span style="color:#e2e8f0;font-size:13px;font-weight:600">¥3.011</span></div></div>
-  <div class="card">
-  <div style="color:#94a3b8;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">⚠️ 风险边界</div>
-  <div style="margin-bottom:16px;padding:14px;background:#450a0a;border-radius:10px;border:1px solid #7f1d1d">
-    <div style="color:#f87171;font-size:12px;margin-bottom:4px">下沿失效（止损线）</div>
-    <div style="color:#fca5a5;font-size:24px;font-weight:700">¥2.919</div>
-  </div>
-  <div style="padding:14px;background:#14532d;border-radius:10px;border:1px solid #166534">
-    <div style="color:#4ade80;font-size:12px;margin-bottom:4px">上沿突破（趋势确认）</div>
-    <div style="color:#86efac;font-size:24px;font-weight:700">¥3.966</div>
-  </div>
-</div>
-</div>
+        <div class="band" aria-label="price position in Bollinger band">
+          <div class="band-marker" style="left:calc(75.09% - 1px)"></div>
+        </div>
+        <div class="band-labels">
+          <span>下轨 ¥3.011</span>
+          <span>现价 ¥3.659</span>
+          <span>上轨 ¥3.874</span>
+        </div>
+        <div class="mini-grid">
+          <div class="mini"><span>MA20</span><strong>¥3.442</strong></div>
+          <div class="mini"><span>MA60</span><strong>¥3.339</strong></div>
+          <div class="mini"><span>ATR14</span><strong>¥0.092</strong></div>
+          <div class="mini"><span>下沿失效</span><strong class="change-down">¥2.919</strong></div>
+          <div class="mini"><span>上沿突破</span><strong class="change-up">¥3.966</strong></div>
+          <div class="mini"><span>模板</span><strong>2000 / 200</strong></div>
+        </div>
 
+      </section>
+    </div>
+  </article>
 
-
-
-<!-- Footer -->
-<div style="text-align:center;margin-top:20px;color:#374151;font-size:12px">
-  ATR Grid MVP · SZ159915 · 2026-04-24 02:09
-</div>
-
-</div>
-<p style="color:#374151;font-size:11px;text-align:center;margin-top:24px">生成于 2026-04-24 02:09 · atr-grid</p>
+  <div class="footer">ATR Grid · generated on dev · 2026-04-24 02:09</div>
+</main>
 </body>
 </html>

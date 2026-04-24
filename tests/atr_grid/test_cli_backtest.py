@@ -155,6 +155,20 @@ def test_backtest_cli_accepts_all_registered_profiles(monkeypatch):
     assert captured_profiles == ["balanced", "yield", "trend_hybrid"]
 
 
+def test_multi_cli_returns_nonzero_when_all_symbols_fail(monkeypatch, capsys):
+    def fake_generate_plan(_symbol: str, *, shares: int):
+        raise ValueError("no data")
+
+    monkeypatch.setattr(cli_mod, "generate_plan", fake_generate_plan)
+
+    exit_code = cli_mod.main(["multi", "SH515880"])
+
+    assert exit_code == 1
+    out = capsys.readouterr().out
+    assert "[SH515880] 生成失败: no data" in out
+    assert "没有成功生成任何计划" in out
+
+
 def test_backtest_cli_default_json_path(tmp_path, monkeypatch, capsys):
     """不指定 --json-out 也不 --no-save 时，应落在 output/backtest/ 下。"""
     monkeypatch.chdir(tmp_path)

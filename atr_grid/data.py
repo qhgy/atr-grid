@@ -3,12 +3,12 @@
 数据源优先级（load_market_context）：
 1. 完整 cookies 雪球（atr_grid.data_snowball，默认读
    D:\\000trae\\A股数据\\aaa\\pysnowball\\dca_dashboard\\cookies.txt）
-2. 旧链路 core.market_data.get_kline_data（pip pysnowball → akshare → 本地 JSON）
+2. 旧链路 core.market_data.get_kline_data（pip pysnowball → 新浪 → akshare → 本地 JSON）
 3. 全部失败时抛 ValueError
 
 实例返回的 MarketContext.data_source 可能值：
 - snowball-full ：走了新增的完整 cookies 雪球。
-- api / api-cache / local：core.market_data 原有标记。
+- api / api-cache / sina / akshare / local：core.market_data 原有标记。
 
 若环境变量 ATRGRID_DISABLE_SNOWBALL_FULL=1，则跳过 snowball-full 直接走旧链路。
 """
