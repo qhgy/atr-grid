@@ -103,12 +103,24 @@ def run_backtest(
     trade_shares: int = DEFAULT_TRADE_SHARES,
     warmup_bars: int = 60,
     kline_count: int | None = None,
+    stop_pct: float | None = None,
+    chandelier_atr_mult: float | None = None,
+    chandelier_lookback: int = 22,
 ) -> BacktestResult:
     """Walk-forward 回测。
 
     两种调用模式：
     1. 直接传 rows（单测 / 合成 K 线）
     2. 传 symbol，由 load_market_context 拉全量 K 线
+
+    Phase 3.3 止损（默认关闭，详见 docs/phase3_3_stop_loss.md）：
+    - stop_pct: 固定成本止损，初始止损价 = initial_price * (1 - stop_pct)。
+      跳破触发 simulate_day 内 stop_loss_trigger → frozen → 永久停接回（仅允许卖出）。
+      这条路径适合 live paper（人工 resume），回测中开启会永久冻结。
+    - chandelier_atr_mult: 动态追踪止损 ATR 倍数。走回测独立路径：每日 simulate_day
+      之后维护局部 chand_line = max(prev, highest_high[近 N 日] - M*ATR14)。跳破 → 强制
+      卖 trade_shares 股（不触发 paper.frozen），下次自然反弹 grid 可接回。
+    - chandelier_lookback: chandelier 回望窗口，默认 22 日（~1 个月）。
 
     详见模块 docstring。
     """
@@ -143,13 +155,21 @@ def run_backtest(
             f"warmup_bars({warmup_bars}) too large for bars={len(rows)}"
         )
 
-    state = PaperState(shares=initial_shares, cash=initial_cash, last_price=None)
     initial_price = float(rows[start_index]["close"])
     initial_equity = initial_cash + initial_shares * initial_price
+    initial_stop = (initial_price * (1.0 - stop_pct)) if stop_pct is not None else None
+    state = PaperState(
+        shares=initial_shares,
+        cash=initial_cash,
+        last_price=None,
+        stop_price=initial_stop,
+    )
 
     trades_log: list[dict] = []
     all_events: list[dict] = []
     equity_curve: list[dict] = []
+    # Phase 3.3 chandelier trailing stop line：独立于 paper.stop_price，仅用于回测内部强制减仓。
+    chand_line: float | None = None
 
     for i in range(start_index, len(rows)):
         row = rows[i]
@@ -185,6 +205,48 @@ def run_backtest(
             if ev.get("type") in ("buy", "sell"):
                 trades_log.append(ev)
             all_events.append(ev)
+
+        # Phase 3.3 chandelier: 在 grid 成交之后独立评估是否强制减仓。
+        # 不走 paper.frozen 路径（避免永久冻结）；触发后卖 trade_shares，下次自然反弹再买回。
+        if (chandelier_atr_mult is not None
+                and state.shares > 0
+                and snap.atr14 is not None):
+            lb_start = max(0, i - chandelier_lookback + 1)
+            highest = max(float(rows[k].get("high", rows[k]["close"]))
+                          for k in range(lb_start, i + 1))
+            trailing = highest - chandelier_atr_mult * snap.atr14
+            if chand_line is None or trailing > chand_line:
+                chand_line = trailing
+            if chand_line is not None and close < chand_line:
+                exit_shares = min(state.shares, trade_shares)
+                if exit_shares > 0:
+                    proceeds = close * exit_shares
+                    fee = commission(proceeds)
+                    state = replace(
+                        state,
+                        shares=state.shares - exit_shares,
+                        cash=state.cash + proceeds - fee,
+                        trades_count=state.trades_count + 1,
+                    )
+                    trade_ev = {
+                        "type": "sell",
+                        "price": close,
+                        "shares": exit_shares,
+                        "amount": proceeds,
+                        "fee": fee,
+                        "tag": "chandelier_exit",
+                        "regime": plan.regime,
+                        "date": date,
+                    }
+                    trades_log.append(trade_ev)
+                    all_events.append(trade_ev)
+                    all_events.append({
+                        "type": "chandelier_exit",
+                        "current": close,
+                        "chand_line": chand_line,
+                        "shares_exited": exit_shares,
+                        "date": date,
+                    })
 
         equity = state.cash + state.shares * close
         benchmark_equity = initial_cash + initial_shares * close
