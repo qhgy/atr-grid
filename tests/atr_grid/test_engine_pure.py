@@ -10,6 +10,8 @@ from atr_grid.engine import (
     _effective_step,
     _generate_buy_levels,
     _generate_sell_levels,
+    _prealert_buy_price,
+    _prealert_sell_price,
     _suggest_tactical_shares,
     _suggest_trim_shares,
     quantize_price,
@@ -142,3 +144,13 @@ class TestBuildReferenceLadder:
         sell, rebuy = _build_reference_ladder(anchor_sell=1.0, atr14=100.0, precision=3)
         for price in rebuy:
             assert price > 0
+
+
+class TestPrealertPrices:
+    def test_sell_prealert_is_target_minus_abs_buffer(self):
+        cfg = GridConfig(prealert_abs_buffer=0.005)
+        assert _prealert_sell_price(1.400, 3, cfg) == 1.395
+
+    def test_buy_prealert_is_target_plus_abs_buffer(self):
+        cfg = GridConfig(prealert_abs_buffer=0.005)
+        assert _prealert_buy_price(1.400, 3, cfg) == 1.405

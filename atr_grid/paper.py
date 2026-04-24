@@ -3,14 +3,14 @@
 用 atr_grid 每日生成的 plan 驱动一个虚拟持仓，跨越真实成交之前积累纪律证据。
 
 **核心训练目标**：治"持有时舍不得卖、最后坐过山车"的散户毛病。
-持有 1000 股 → 分 10 份 → 每涨一档卖 100 股 → 强制锻炼"卖出"。
+默认按 2000 股底仓演练 → 分 10 份 → 每到目标档位加减 200 股。
 
 数据文件（在 aaa/paper_logs/ 下，自动创建）：
 - {SYMBOL}_state.json   — 当前虚拟持仓快照
 - {SYMBOL}.jsonl        — 每日流水（含 plan 概要 + 成交事件 + 组合净值）
 
 用法（在 aaa 目录下）：
-    python -m atr_grid.paper init SH515880 --shares 1000
+    python -m atr_grid.paper init SH515880 --shares 2000
     python -m atr_grid.paper run SH515880
     python -m atr_grid.paper status SH515880
 
@@ -48,7 +48,8 @@ LOG_DIR = AAA_ROOT / "output" / "paper_logs"
 
 COMMISSION_RATE = 0.0001   # 0.01% 佣金
 COMMISSION_MIN = 5.0       # 5 元起征
-TRANCHE_SHARES = 100       # 每次操作 1 手（100 股）
+DEFAULT_INITIAL_SHARES = 2000
+DEFAULT_TRADE_SHARES = 200
 
 
 @dataclass(slots=True)
@@ -140,6 +141,11 @@ def commission(amount: float) -> float:
     return max(amount * COMMISSION_RATE, COMMISSION_MIN)
 
 
+def _trade_shares() -> int:
+    """Fixed simulated trade size: +/- 200 shares around the 2000-share base."""
+    return DEFAULT_TRADE_SHARES
+
+
 def _resolve_levels(plan: Any) -> tuple[list[float], list[float]]:
     """统一卖/买价位来源。
 
@@ -213,16 +219,17 @@ def _simulate_fills(p: Portfolio, plan: Any) -> list[dict[str, Any]]:
 
     # 4. 向上跨越某档卖点 → 卖 1 tranche
     for lvl in sorted([x for x in sell_levels if x is not None]):
-        if prev < lvl <= current and p.shares >= TRANCHE_SHARES:
-            amount = TRANCHE_SHARES * lvl
+        trade_shares = _trade_shares()
+        if prev < lvl <= current and p.shares >= trade_shares:
+            amount = trade_shares * lvl
             fee = commission(amount)
-            p.shares -= TRANCHE_SHARES
+            p.shares -= trade_shares
             p.cash += amount - fee
             p.trades_count += 1
             events.append({
                 "type": "sell",
                 "price": lvl,
-                "shares": TRANCHE_SHARES,
+                "shares": trade_shares,
                 "amount": round(amount, 2),
                 "fee": round(fee, 2),
                 "net": round(amount - fee, 2),
@@ -234,17 +241,18 @@ def _simulate_fills(p: Portfolio, plan: Any) -> list[dict[str, Any]]:
     if not invalidated and not p.frozen:
         for lvl in sorted([x for x in buy_levels if x is not None], reverse=True):
             if prev > lvl >= current:
-                amount = TRANCHE_SHARES * lvl
+                trade_shares = _trade_shares()
+                amount = trade_shares * lvl
                 fee = commission(amount)
                 if p.cash < amount + fee:
                     break
-                p.shares += TRANCHE_SHARES
+                p.shares += trade_shares
                 p.cash -= amount + fee
                 p.trades_count += 1
                 events.append({
                     "type": "buy",
                     "price": lvl,
-                    "shares": TRANCHE_SHARES,
+                    "shares": trade_shares,
                     "amount": round(amount, 2),
                     "fee": round(fee, 2),
                     "net": round(-(amount + fee), 2),
@@ -313,7 +321,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     sym = args.symbol
     p = load_portfolio(sym)
     if p is None:
-        print(f"[run] {sym} 未初始化，请先 python -m atr_grid.paper init {sym} --shares 1000",
+        print(f"[run] {sym} 未初始化，请先 python -m atr_grid.paper init {sym} --shares {DEFAULT_INITIAL_SHARES}",
               file=sys.stderr)
         return 1
 
@@ -508,7 +516,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p_init = sub.add_parser("init", help="初始化虚拟持仓")
     p_init.add_argument("symbol", help="标的代码，如 SH510300")
-    p_init.add_argument("--shares", type=int, default=1000, help="起始股数（默认 1000）")
+    p_init.add_argument("--shares", type=int, default=DEFAULT_INITIAL_SHARES, help=f"起始股数（默认 {DEFAULT_INITIAL_SHARES}）")
     p_init.add_argument("--cash", type=float, default=0.0, help="起始现金（默认 0）")
     p_init.add_argument("--stop-price", type=float, default=None,
                         help="成本止损价，跌破即冻结接回（仍允许卖出）；如 --stop-price 1.0")

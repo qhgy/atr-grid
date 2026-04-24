@@ -157,6 +157,8 @@ def render_markdown(plan: GridPlan) -> str:
         f"- 步长：{_fmt_price(plan.step)}",
         f"- 主买点：{_fmt_price(plan.primary_buy)}",
         f"- 主卖点：{_fmt_price(plan.primary_sell)}",
+        f"- 买点预警：{_fmt_price(plan.prealert_buy)}",
+        f"- 卖点预警：{_fmt_price(plan.prealert_sell)}",
         f"- 建议减仓股数：{plan.trim_shares if plan.trim_shares else '无'}",
         f"- 建议接回价：{_fmt_price(plan.rebuy_price)}",
         f"- 买入档：{fmt_levels(plan.buy_levels)}",
@@ -379,15 +381,22 @@ def _translate_data_source(value: str) -> str:
 # Notifications (Server酱 / sctapi.ftqq.com)
 # ---------------------------------------------------------------------------
 
-_NOTIFY_THRESHOLD_PCT = 1.5  # alert when price within 1.5% of any key level
+_NOTIFY_THRESHOLD_PCT = 1.5  # fallback alert when price within 1.5% of any key level
 
 
 def should_notify(plan: GridPlan, threshold_pct: float = _NOTIFY_THRESHOLD_PCT) -> bool:
-    """Return True if the current price is within *threshold_pct* of any key level."""
+    """Return True if the current price enters the pre-alert band or is near a key level."""
     price = plan.current_price
+    if plan.prealert_sell is not None and price >= plan.prealert_sell:
+        return True
+    if plan.prealert_buy is not None and price <= plan.prealert_buy:
+        return True
+
     key_levels: list[float | None] = [
         plan.primary_buy,
         plan.primary_sell,
+        plan.prealert_buy,
+        plan.prealert_sell,
         plan.lower_invalidation,
         plan.upper_breakout,
         *(plan.reference_sell_ladder or []),
@@ -405,6 +414,8 @@ def build_notify_content(plan: GridPlan) -> tuple[str, str]:
     title = f"[{plan.symbol}] ¥{price:.3f} — {action_short}"
     buy_text = f"¥{plan.primary_buy:.3f}" if plan.primary_buy else "N/A"
     sell_text = f"¥{plan.primary_sell:.3f}" if plan.primary_sell else "N/A"
+    buy_alert_text = f"¥{plan.prealert_buy:.3f}" if plan.prealert_buy else "N/A"
+    sell_alert_text = f"¥{plan.prealert_sell:.3f}" if plan.prealert_sell else "N/A"
     regime = _translate_regime(plan.regime)
     lines = [
         f"## {plan.symbol}  |  {plan.last_trade_date}",
@@ -415,6 +426,7 @@ def build_notify_content(plan: GridPlan) -> tuple[str, str]:
         f"**结论**：{plan.reason}",
         "",
         f"主买点：{buy_text}　主卖点：{sell_text}",
+        f"预警买点：{buy_alert_text}　预警卖点：{sell_alert_text}",
         "",
         "[查看最新 Dashboard](https://qhgy.github.io/atr-grid/)",
     ]
@@ -627,19 +639,23 @@ def _html_action_numbers(plan: GridPlan) -> str:
     if sell_price is not None:
         pct = _pct_change(sell_price, plan.current_price)
         pct_str = f"{pct:+.2f}%" if pct is not None else ""
+        prealert_sell = f"¥{plan.prealert_sell:.3f}" if plan.prealert_sell is not None else "N/A"
         parts.append(
             f'<div style="background:#1c2a3a;border-radius:10px;padding:14px 20px;min-width:120px">'
             f'<div style="color:#60a5fa;font-size:12px;margin-bottom:4px">建议卖出</div>'
             f'<div style="color:#fb923c;font-size:22px;font-weight:700">{plan.trend_sell_limit_shares} 股</div>'
             f'<div style="color:#9ca3af;font-size:12px">在 ¥{sell_price:.3f} {pct_str}</div>'
+            f'<div style="color:#64748b;font-size:11px">预警从 {prealert_sell}</div>'
             f'</div>'
         )
     if rebuy_price is not None:
+        prealert_buy = f"¥{plan.prealert_buy:.3f}" if plan.prealert_buy is not None else "N/A"
         parts.append(
             f'<div style="background:#1c2a3a;border-radius:10px;padding:14px 20px;min-width:120px">'
             f'<div style="color:#60a5fa;font-size:12px;margin-bottom:4px">接回价位</div>'
             f'<div style="color:#22c55e;font-size:22px;font-weight:700">¥{rebuy_price:.3f}</div>'
             f'<div style="color:#9ca3af;font-size:12px">回落后接</div>'
+            f'<div style="color:#64748b;font-size:11px">预警从 {prealert_buy}</div>'
             f'</div>'
         )
     return (

@@ -92,6 +92,8 @@ class TestAssembleTrendUpPath:
         assert plan.trim_shares == 100  # 1000 * 0.10
         assert plan.primary_sell is not None
         assert plan.primary_buy is not None  # rebuy price populated
+        assert plan.prealert_sell is not None
+        assert plan.prealert_buy is not None
 
     def test_trend_up_with_few_shares_suggests_observe(self):
         plan = _assemble_plan(

@@ -42,6 +42,8 @@ class GridPlan:
     step: float | None
     primary_buy: float | None
     primary_sell: float | None
+    prealert_buy: float | None
+    prealert_sell: float | None
     buy_levels: list[float]
     sell_levels: list[float]
     lower_invalidation: float | None
@@ -270,6 +272,8 @@ def _make_plan(
         step=None,
         primary_buy=None,
         primary_sell=None,
+        prealert_buy=None,
+        prealert_sell=None,
         buy_levels=[],
         sell_levels=[],
         lower_invalidation=None,
@@ -328,6 +332,19 @@ def _build_reference_ladder(anchor_sell: float, atr14: float, precision: int, cf
         sell_ladder.append(sell_price)
         rebuy_ladder.append(rebuy_price)
     return sell_ladder, rebuy_ladder
+
+
+def _prealert_sell_price(target_sell: float | None, precision: int, cfg: GridConfig = DEFAULT_CONFIG) -> float | None:
+    if target_sell is None:
+        return None
+    min_tick = 10.0 ** -precision
+    return quantize_price(max(target_sell - cfg.prealert_abs_buffer, min_tick), precision)
+
+
+def _prealert_buy_price(target_buy: float | None, precision: int, cfg: GridConfig = DEFAULT_CONFIG) -> float | None:
+    if target_buy is None:
+        return None
+    return quantize_price(target_buy + cfg.prealert_abs_buffer, precision)
 
 
 def _build_trend_trim_steps(trim_shares: int, sell_trigger: float, rebuy_price: float, lower_invalidation: float | None) -> list[str]:
@@ -419,6 +436,8 @@ def _build_trend_up_plan(pctx: _PlanContext) -> GridPlan:
         step=pctx.step,
         primary_buy=rebuy_price,
         primary_sell=sell_trigger,
+        prealert_buy=_prealert_buy_price(rebuy_price, ctx.price_precision, cfg),
+        prealert_sell=_prealert_sell_price(sell_trigger, ctx.price_precision, cfg),
         lower_invalidation=pctx.lower_invalidation,
         upper_breakout=pctx.upper_breakout,
         trim_shares=trim_shares,
@@ -496,6 +515,8 @@ def _build_range_plan(pctx: _PlanContext) -> GridPlan:
         step=pctx.step,
         primary_buy=primary_buy,
         primary_sell=primary_sell,
+        prealert_buy=_prealert_buy_price(primary_buy, precision, cfg),
+        prealert_sell=_prealert_sell_price(primary_sell, precision, cfg),
         buy_levels=buy_levels,
         sell_levels=sell_levels,
         lower_invalidation=pctx.lower_invalidation,

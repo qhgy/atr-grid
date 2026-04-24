@@ -43,6 +43,9 @@ class GridConfig:
     # -- reference ladder --
     ladder_tranches: int = 3
 
+    # -- pre-alert band --
+    prealert_abs_buffer: float = 0.005
+
 
 # Singleton default config for convenience.
 DEFAULT_CONFIG = GridConfig()
