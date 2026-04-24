@@ -48,6 +48,11 @@ class GridConfig:
     # -- reference ladder --
     ladder_tranches: int = 3
 
+    # -- Phase 3.1: 非对称 ladder step 乘数 --
+    # sell_step > 1.0 → 卖档疏（赚单拉大）；rebuy_step < 1.0 → 买档密（接回更易）
+    ladder_sell_step_multiplier: float = 1.0
+    ladder_rebuy_step_multiplier: float = 1.0
+
     # -- pre-alert band --
     # 有效预警距 = max(prealert_abs_buffer, prealert_buffer_pct * target_price)
     # prealert_buffer_pct 让预警距随价位同比伸缩，避免贵标偏紧、贱标偏宽。

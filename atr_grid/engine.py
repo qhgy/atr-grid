@@ -326,9 +326,11 @@ def _build_reference_ladder(anchor_sell: float, atr14: float, precision: int, cf
     sell_ladder: list[float] = []
     rebuy_ladder: list[float] = []
     min_tick = 10.0 ** -precision  # smallest representable price at this precision
+    sell_step = atr14 * cfg.ladder_sell_step_multiplier
+    rebuy_step = atr14 * cfg.ladder_rebuy_step_multiplier
     for index in range(cfg.ladder_tranches):
-        sell_price = quantize_price(anchor_sell + index * atr14, precision)
-        rebuy_price = quantize_price(max(sell_price - atr14, min_tick), precision)
+        sell_price = quantize_price(anchor_sell + index * sell_step, precision)
+        rebuy_price = quantize_price(max(sell_price - rebuy_step, min_tick), precision)
         sell_ladder.append(sell_price)
         rebuy_ladder.append(rebuy_price)
     return sell_ladder, rebuy_ladder
