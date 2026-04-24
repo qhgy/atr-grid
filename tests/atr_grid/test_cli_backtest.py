@@ -133,6 +133,28 @@ def test_backtest_cli_no_save_skips_json(tmp_path, monkeypatch, capsys):
     assert "JSON 已写出" not in out
 
 
+def test_backtest_cli_accepts_all_registered_profiles(monkeypatch):
+    captured_profiles: list[str] = []
+
+    def fake_run_backtest(**kwargs):
+        captured_profiles.append(kwargs["profile_name"])
+        return _fake_result(symbol=kwargs["symbol"], profile=kwargs["profile_name"])
+
+    monkeypatch.setattr(cli_mod, "run_backtest", fake_run_backtest)
+
+    for profile in ("balanced", "yield", "trend_hybrid"):
+        exit_code = cli_mod.main([
+            "backtest",
+            "SH515880",
+            "--profile",
+            profile,
+            "--no-save",
+        ])
+        assert exit_code == 0
+
+    assert captured_profiles == ["balanced", "yield", "trend_hybrid"]
+
+
 def test_backtest_cli_default_json_path(tmp_path, monkeypatch, capsys):
     """不指定 --json-out 也不 --no-save 时，应落在 output/backtest/ 下。"""
     monkeypatch.chdir(tmp_path)

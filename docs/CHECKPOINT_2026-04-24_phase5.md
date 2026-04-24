@@ -6,7 +6,7 @@
 - 项目：`D:\000trae\atr-grid-repo`  ·  分支：`dev`
 - HEAD commit：`00360e2`（Phase 5.1 + 5.2 源码 + 测试）。本文档 + `scripts/phase5_compare.py` + `scripts/paper_daily.py` 的地板预警显示会在后续一条 `docs+tools` commit 里补交
 - 工作树：干净（除 `docs/CHECKPOINT_2026-04-24_nasdaq.md` / `output/atr_grid.html` 历史遗留）
-- Phase：Phase 5 **hybrid 接入交易主循环**，180/180 绿
+- Phase：Phase 5 **hybrid 接入交易主循环**，并补齐正式 CLI / paper 账本入口
   - 5.1 底仓锁定：`simulate_day` 和 `run_backtest` 不再卖穿底仓
   - 5.2 现金地板：`simulate_day` 买单前走 `cash_floor_guard`，不够直接阻断
 
@@ -20,13 +20,20 @@
 - 全量测试：**180/180** 绿（172 + 5 个 5.1 + 3 个 5.2）
 
 ### 后续一条 `docs+tools` commit 带进来
-- `scripts/phase5_compare.py`：三 profile（stable / balanced / trend\_hybrid）在 2026-03-01 → 04-23 同起点对比
+- `scripts/phase5_compare.py`：三 profile（stable / balanced / trend\_hybrid）在 2026-02-25 → 2026-04-23 同起点对比
 - `scripts/paper_daily.py`：对主买档做 `cash_floor_guard` 预检，日报多一行“地板预警”（不改 plan，只往 payload 多写 `cash_floor_check` 字段）
 - 本文件
 
+### 入口补齐 commit（2026-04-24 评审后）
+- `atr_grid/cli.py`：`backtest --profile` 改为读取 `available_profiles()`，`balanced/yield/trend_hybrid` 都能从正式 CLI 运行
+- `atr_grid/paper.py`：`Portfolio.profile` 持久化；`paper init/run --profile trend_hybrid` 接入 `build_plan_with_frame + apply_hybrid_overlay`；账本成交路径传入底仓锁、现金地板和应急状态
+- `tests/atr_grid/test_paper_hybrid_cli.py`：补齐 legacy state 默认 stable、hybrid 参数传入 `simulate_day`、profile 覆盖持久化 3 条入口测试
+- `tests/atr_grid/test_backtest.py`：删除重复定义的 Phase 5 测试块，避免测试数口径虚高
+- 全量测试：**185 passed**
+
 ## 关键结论 / 数字（带警示）
 
-### B 扩参：phase5\_compare 三 profile 对比（2026-03-01 → 04-23、41 交易日）
+### B 扩参：phase5\_compare 三 profile 对比（2026-02-25 → 2026-04-23、41 交易日）
 
 | profile       | 终权益     | 策略%  | 持有%  | 超额%     | 交易 | 回合 | MDD%  | 终股 |
 |---------------|------------|--------|--------|-----------|------|------|-------|------|
@@ -53,7 +60,7 @@
 
 ## 下一步选项（由用户选，我不自己决定）
 
-1. **观察 2-3 周**：每日跑 `paper_daily` 看决策质量（包括新的地板预警行），不改代码
+1. **观察 2-3 周**：每日跑 `paper run --profile trend_hybrid` 记录账本，同时用 `paper_daily` 看决策质量
 2. **换下跌标的回测**：找个 2026 Q1 下跌的 ETF 跑同样 40 天，验证 hybrid 在主战场的表现 —— 现在是真的有 hybrid 接入，下跌行情里应该能见到现金地板和应急补仓走颜色
 3. **Server 酱接入**：把 paper\_daily 的 md 输出推到微信，实现无人值守
 4. **参数微调**：比如改 `reference_tranche_shares` / `cash_floor_ratio`，再跑 phase5\_compare 看灵敏度
@@ -70,7 +77,7 @@
 ### 要跑的命令
 ```
 git log --oneline -10
-uv run pytest -q                         # 期待 180 passed
+uv run pytest -q                         # 期待全绿
 uv run python scripts/phase5_compare.py  # hybrid 对比数字稳定就不用重跑
 ```
 
@@ -88,6 +95,7 @@ uv run python scripts/phase5_compare.py  # hybrid 对比数字稳定就不用重
 - `atr_grid.paper.PaperState.base_shares: int = 0` — 卖单下限
 - `simulate_day(state, plan, *, trade_shares=DEFAULT_TRADE_SHARES, cash_floor=0.0, total_equity=0.0, cfg=None, emergency_unlocked=False)` — 新 4 个 kwargs 全默认兼容旧调用
 - `run_backtest`：hybrid 开时自动锁 `initial_shares` 为底仓；每日传现金地板 + 应急状态给 simulate\_day
+- `python -m atr_grid.paper init/run SYMBOL --profile trend_hybrid`：正式纸面账本入口，profile 写入 state 并参与后续 run
 
 ### profile 当前参数（未变）
 6 profiles：`stable / dev / aggressive / balanced / yield / trend_hybrid`。只 `trend_hybrid` 默认 `trend_hybrid_enabled=True`，其他都 False。

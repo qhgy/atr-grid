@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 
 from .backtest import run_backtest
-from .config import DEFAULT_CONFIG, for_profile
+from .config import DEFAULT_CONFIG, available_profiles, for_profile
 from .engine import generate_plan, replay_symbol
 from .fund_eastmoney import fetch_fund_meta
 from .report import (
@@ -56,7 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
     backtest_parser.add_argument(
         "--profile",
         default="default",
-        choices=["default", "stable", "dev", "aggressive"],
+        choices=["default", *available_profiles()],
         help="参数 profile，默认 default",
     )
     backtest_parser.add_argument("--kline-count", type=int, default=900, help="拉取 K 线根数，默认 900")

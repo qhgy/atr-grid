@@ -31,7 +31,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import dataclass, asdict, field, replace
+from dataclasses import dataclass, asdict, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -57,6 +57,7 @@ class Portfolio:
     """虚拟组合状态。"""
 
     symbol: str
+    profile: str
     shares: int
     cash: float
     last_price: float | None
@@ -103,6 +104,7 @@ def load_portfolio(symbol: str) -> Portfolio | None:
     data.setdefault("frozen", False)
     data.setdefault("frozen_at", None)
     data.setdefault("frozen_price", None)
+    data.setdefault("profile", "stable")
     return Portfolio(**data)
 
 
@@ -144,6 +146,25 @@ def commission(amount: float) -> float:
 def _trade_shares() -> int:
     """Fixed simulated trade size: +/- 200 shares around the 2000-share base."""
     return DEFAULT_TRADE_SHARES
+
+
+def _cfg_for_profile(profile: str):
+    from atr_grid.config import DEFAULT_CONFIG, for_profile
+    return DEFAULT_CONFIG if profile in ("default", "stable") else for_profile(profile)
+
+
+def _profile_choices() -> list[str]:
+    from atr_grid.config import available_profiles
+    return available_profiles()
+
+
+def _resolve_profile(args: argparse.Namespace, p: Portfolio | None = None) -> str:
+    profile = getattr(args, "profile", None)
+    if profile:
+        return profile
+    if p is not None and p.profile:
+        return p.profile
+    return "stable"
 
 
 def _resolve_levels(plan: Any) -> tuple[list[float], list[float]]:
@@ -362,7 +383,13 @@ def simulate_day(
     return new_state, events
 
 
-def _simulate_fills(p: Portfolio, plan: Any) -> list[dict[str, Any]]:
+def _simulate_fills(
+    p: Portfolio,
+    plan: Any,
+    *,
+    cfg: Any = None,
+    frame: Any = None,
+) -> list[dict[str, Any]]:
     """根据上次 vs 本次 current_price 的跨越判断是否触发成交。
 
     成交规则按 regime 分流：
@@ -382,8 +409,29 @@ def _simulate_fills(p: Portfolio, plan: Any) -> list[dict[str, Any]]:
         frozen=p.frozen,
         frozen_at=p.frozen_at,
         frozen_price=p.frozen_price,
+        base_shares=p.initial_shares if getattr(cfg, "trend_hybrid_enabled", False) else 0,
     )
-    new_state, events = simulate_day(state, plan, trade_shares=_trade_shares())
+    current = float(plan.current_price)
+    total_equity = p.equity(current)
+    cash_floor = (
+        total_equity * getattr(cfg, "cash_floor_ratio", 0.0)
+        if getattr(cfg, "trend_hybrid_enabled", False)
+        else 0.0
+    )
+    emergency_unlocked = False
+    if getattr(cfg, "trend_hybrid_enabled", False) and frame is not None:
+        from atr_grid import hybrid as _hybrid
+        emergency_unlocked = _hybrid.should_emergency_refill(frame, cfg)
+
+    new_state, events = simulate_day(
+        state,
+        plan,
+        trade_shares=getattr(cfg, "reference_tranche_shares", _trade_shares()),
+        cash_floor=cash_floor,
+        total_equity=total_equity,
+        cfg=cfg,
+        emergency_unlocked=emergency_unlocked,
+    )
     # 回写可变字段（last_price/stop_price 由外部 cmd_run 负责）
     p.shares = new_state.shares
     p.cash = new_state.cash
@@ -397,16 +445,21 @@ def _simulate_fills(p: Portfolio, plan: Any) -> list[dict[str, Any]]:
 # ----- CLI subcommands ------------------------------------------------------
 
 
-def _import_plan(symbol: str, shares: int = 200):
+def _build_plan_and_frame(symbol: str, *, shares: int, cfg: Any):
     """延迟 import + 把虚拟盘的真实 shares 传给 atr_grid，
     让 trim_shares = shares × 10% 计算正确（默认 200 股 → trim=0 是退化值）。
     """
-    from atr_grid.engine import generate_plan
-    return generate_plan(symbol, shares=shares)
+    from atr_grid.data import load_market_context
+    from atr_grid.engine import build_plan_with_frame
+
+    context = load_market_context(symbol, shares=shares, cfg=cfg)
+    return build_plan_with_frame(context, cfg=cfg)
 
 
 def cmd_init(args: argparse.Namespace) -> int:
     sym = args.symbol
+    profile = _resolve_profile(args)
+    cfg = _cfg_for_profile(profile)
     existing = load_portfolio(sym)
     if existing and not args.force:
         print(f"[init] {sym} 已存在虚拟持仓（shares={existing.shares} cash={existing.cash:.2f}）")
@@ -415,12 +468,13 @@ def cmd_init(args: argparse.Namespace) -> int:
     if args.force:
         clear_journal(sym)
 
-    plan = _import_plan(sym, shares=args.shares)
+    plan, _frame = _build_plan_and_frame(sym, shares=args.shares, cfg=cfg)
     price = float(plan.current_price)
     initial_cash = args.cash if args.cash is not None else 0.0
 
     p = Portfolio(
         symbol=sym,
+        profile=profile,
         shares=args.shares,
         cash=initial_cash,
         last_price=None,
@@ -432,6 +486,7 @@ def cmd_init(args: argparse.Namespace) -> int:
     )
     save_portfolio(p)
     print(f"[init] {sym} 虚拟盘已建立")
+    print(f"       profile：{profile}")
     print(f"       起始持仓：{args.shares} 股 @ ¥{price:.3f}（依据当日收盘）")
     print(f"       起始现金：¥{initial_cash:.2f}")
     if args.stop_price is not None:
@@ -450,14 +505,30 @@ def cmd_run(args: argparse.Namespace) -> int:
               file=sys.stderr)
         return 1
 
-    plan = _import_plan(sym, shares=p.shares)
+    profile = _resolve_profile(args, p)
+    cfg = _cfg_for_profile(profile)
+    profile_changed = profile != p.profile
+    if profile_changed:
+        p.profile = profile
+
+    plan, frame = _build_plan_and_frame(sym, shares=p.shares, cfg=cfg)
+    from atr_grid.engine import apply_hybrid_overlay
+    plan, allocation = apply_hybrid_overlay(
+        plan,
+        frame,
+        total_equity=p.equity(float(plan.current_price)),
+        cfg=cfg,
+    )
     trade_date = plan.last_trade_date
 
     if p.last_trade_date == trade_date and not args.force:
+        if profile_changed:
+            save_portfolio(p)
+            print(f"[run] {sym} profile 已更新为 {profile}")
         print(f"[run] {sym} 的交易日 {trade_date} 已记录，--force 可覆盖")
         return 0
 
-    events = _simulate_fills(p, plan)
+    events = _simulate_fills(p, plan, cfg=cfg, frame=frame)
     current = float(plan.current_price)
     p.last_price = current
     p.last_trade_date = trade_date
@@ -474,6 +545,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         "ts": datetime.now().isoformat(timespec="seconds"),
         "trade_date": trade_date,
         "symbol": sym,
+        "profile": profile,
+        "hybrid_enabled": bool(getattr(cfg, "trend_hybrid_enabled", False)),
         "current_price": current,
         "regime": plan.regime,
         "mode": plan.mode,
@@ -485,6 +558,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         "buy_levels_used": buy_levels_used,
         "lower_invalidation": plan.lower_invalidation,
         "upper_breakout": plan.upper_breakout,
+        "hybrid_allocation": asdict(allocation) if allocation is not None else None,
         "events": events,
         "portfolio": {
             "shares": p.shares,
@@ -500,7 +574,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     # 终端摘要
     print(f"[run] {sym} trade_date={trade_date}  当前 ¥{current:.3f}  "
-          f"regime={plan.regime}  mode={plan.mode}")
+          f"profile={profile}  regime={plan.regime}  mode={plan.mode}")
     if sell_levels_used:
         print(f"       卖出阶梯：{' / '.join(f'¥{x:.3f}' for x in sell_levels_used)}")
     if buy_levels_used:
@@ -523,6 +597,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             print(f"       · 首日基线 ¥{e['price']:.3f}，未触发成交")
         elif e["type"] == "hold":
             print(f"       · {e['note']}")
+        elif e["type"] == "cash_floor_block":
+            print(f"       · 现金地板拦截买入：需 ¥{e['amount_required']:.2f}，可用 ¥{e['approved']:.2f}")
     print(f"       组合：shares={p.shares}  cash=¥{p.cash:.2f}  equity=¥{equity:.2f}")
     print(f"       对比纯持仓：¥{diff:+.2f} ({diff_pct:+.3f}%)  累计交易 {p.trades_count} 次")
     if p.stop_price is not None:
@@ -550,6 +626,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
     print(f"\n===== {sym} 虚拟盘报告 =====")
     print(f"  起始：{p.created_at[:10]}  初始持仓 {p.initial_shares} 股 @ ¥{p.initial_price:.3f}")
+    print(f"  profile：{p.profile}")
     print(f"  最新：{last['trade_date']}  当前价 ¥{last['current_price']:.3f}")
     print(f"  当前持仓：{p.shares} 股 + 现金 ¥{p.cash:.2f}")
     print(f"  当前净值：¥{last['portfolio']['equity']:.2f}")
@@ -643,6 +720,8 @@ def main(argv: list[str] | None = None) -> int:
     p_init.add_argument("symbol", help="标的代码，如 SH510300")
     p_init.add_argument("--shares", type=int, default=DEFAULT_INITIAL_SHARES, help=f"起始股数（默认 {DEFAULT_INITIAL_SHARES}）")
     p_init.add_argument("--cash", type=float, default=0.0, help="起始现金（默认 0）")
+    p_init.add_argument("--profile", default="stable", choices=_profile_choices(),
+                        help="策略 profile，默认 stable")
     p_init.add_argument("--stop-price", type=float, default=None,
                         help="成本止损价，跌破即冻结接回（仍允许卖出）；如 --stop-price 1.0")
     p_init.add_argument("--force", action="store_true", help="覆盖已有状态")
@@ -650,6 +729,8 @@ def main(argv: list[str] | None = None) -> int:
 
     p_run = sub.add_parser("run", help="执行当日 plan + 虚拟成交 + 写日志")
     p_run.add_argument("symbol", help="标的代码")
+    p_run.add_argument("--profile", default=None, choices=_profile_choices(),
+                       help="临时覆盖并保存策略 profile；默认沿用 init 时的 profile")
     p_run.add_argument("--force", action="store_true", help="同一 trade_date 强制重跑")
     p_run.set_defaults(func=cmd_run)
 

@@ -8,7 +8,7 @@
     balanced     —— 无 hybrid，调过的参数（对照组 B）
     trend_hybrid —— Phase 5 全链 hybrid（实验组）
 
-用近似的起情（¥20000 总权益，7100 股 @ 2026-03-01 收盘 ¥1.116）以同起点比。
+用近似的起情（¥20000 总权益，7100 股）以同起点比。
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ from atr_grid.config import DEFAULT_CONFIG, for_profile
 
 SYMBOL = "SH515880"
 KLINE = 240            # 拉 240 根 K 线
-# warmup=199 使得回测窗口 = KLINE-199 = 41 根，约 2026-03-01 → 04-23
+# warmup=199 使得回测窗口 = KLINE-199 = 41 根；实际日期以回测结果为准。
 WARMUP = 199
 INITIAL_CASH = 12076.40
 INITIAL_SHARES = 7100
@@ -37,18 +37,10 @@ PROFILES = [
 
 
 def main() -> None:
-    print("== Phase 5 profile 对比（SH515880、2026-03-01 → 04-23、~41 交易日） ==")
-    print(f"起情：现金 ¥{INITIAL_CASH:,.2f} + {INITIAL_SHARES} 股，约 ¥20000 总权益\n")
-    header = (
-        f"{'profile':>14} | {'终权益':>10} {'策略%':>7} {'持有%':>7} "
-        f"{'超额%':>7} {'交易':>4} {'回合':>4} {'胜%':>5} "
-        f"{'PF':>5} {'MDD%':>5} {'终股':>5}"
-    )
-    print(header)
-    print("-" * len(header))
-    for name, _note in PROFILES:
+    results = []
+    for name, note in PROFILES:
         cfg = DEFAULT_CONFIG if name == "stable" else for_profile(name)
-        r = run_backtest(
+        result = run_backtest(
             symbol=SYMBOL,
             cfg=cfg,
             profile_name=name,
@@ -57,6 +49,19 @@ def main() -> None:
             warmup_bars=WARMUP,
             kline_count=KLINE,
         )
+        results.append((name, note, result))
+
+    first = results[0][2]
+    print(f"== Phase 5 profile 对比（{SYMBOL}、{first.start_date} → {first.end_date}、{first.bars} 交易日） ==")
+    print(f"起情：现金 ¥{INITIAL_CASH:,.2f} + {INITIAL_SHARES} 股，约 ¥20000 总权益\n")
+    header = (
+        f"{'profile':>14} | {'终权益':>10} {'策略%':>7} {'持有%':>7} "
+        f"{'超额%':>7} {'交易':>4} {'回合':>4} {'胜%':>5} "
+        f"{'PF':>5} {'MDD%':>5} {'终股':>5}"
+    )
+    print(header)
+    print("-" * len(header))
+    for name, _note, r in results:
         pf = r.profit_factor if r.profit_factor != float("inf") else 999.0
         print(
             f"{name:>14} | {r.final_equity:>10.2f} {r.total_return_pct:>7.2f} "
