@@ -50,6 +50,9 @@ def build_parser() -> argparse.ArgumentParser:
     multi_parser.add_argument("--notify", action="store_true", help="有临近档位的标的推送通知")
     multi_parser.add_argument("--notify-always", action="store_true", help="推送所有标的的通知")
 
+    signal_parser = subparsers.add_parser("signal", help="生成 515880 每日网格信号")
+    signal_parser.add_argument("--no-nvda", action="store_true", help="关闭 NVDA 信号")
+
     return parser
 
 
@@ -89,6 +92,18 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Multi-ETF HTML 已写出: {html_target}")
             for p in plans:
                 _maybe_notify(p, notify=args.notify, notify_always=args.notify_always)
+        return 0
+
+    if args.command == "signal":
+        from .signal_engine import generate_signal
+        from .signal_report import write_signal_html
+        sig = generate_signal(disable_nvda=args.no_nvda)
+        html_path = write_signal_html(sig)
+        print(f"[SH515880] 每日信号已生成: {html_path}")
+        rsi_str = f"{sig.rsi14:.1f}" if sig.rsi14 is not None else "N/A"
+        print(f"  日期: {sig.date} | 收盘: ¥{sig.close:.3f} | RSI14: {rsi_str}")
+        print(f"  风控: {sig.risk_action} | RSI状态: {sig.rsi_state}")
+        print(f"  买入档: {len(sig.buy_orders)} | 卖出档: {len(sig.sell_orders)}")
         return 0
 
     replay = replay_symbol(args.symbol, lookback=args.lookback, shares=args.shares)
