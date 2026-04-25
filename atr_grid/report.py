@@ -509,6 +509,9 @@ def render_html(plan: GridPlan, *, paper_state: dict | None = None) -> str:
     # Paper portfolio section
     paper_html = _html_paper(paper_state, plan) if paper_state else ""
 
+    # Hybrid capital allocation section
+    hybrid_html = _html_hybrid(plan) if getattr(plan, 'hybrid_enabled', False) else ""
+
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -591,6 +594,7 @@ def render_html(plan: GridPlan, *, paper_state: dict | None = None) -> str:
 </div>
 
 {paper_html}
+{hybrid_html}
 {warnings_html}
 
 <!-- Footer -->
@@ -792,6 +796,70 @@ def _html_paper(state: dict, plan: GridPlan) -> str:
     <div style="background:#1c2a3a;border-radius:8px;padding:12px 16px;flex:1;min-width:100px">
       <div style="color:#64748b;font-size:11px;margin-bottom:2px">交易次数</div>
       <div style="color:#e2e8f0;font-size:18px;font-weight:700">{trades}</div>
+    </div>
+  </div>
+</div>'''
+
+
+def _html_hybrid(plan: GridPlan) -> str:
+    """Render the Hybrid capital allocation card."""
+    pct = plan.position_pct
+    pct_str = f"{pct:.1f}%" if pct is not None else "N/A"
+    band = plan.position_band or "N/A"
+
+    band_colors = {
+        "low": ("#14532d", "#4ade80"),
+        "mid_low": ("#1e3a5f", "#60a5fa"),
+        "mid_high": ("#431407", "#fb923c"),
+        "high": ("#450a0a", "#f87171"),
+    }
+    bg, fg = band_colors.get(band, ("#1f2937", "#94a3b8"))
+    pct_val = pct if pct is not None else 0
+
+    only_sell_badge = (
+        ' <span style="background:#450a0a;color:#f87171;padding:2px 8px;'
+        'border-radius:4px;font-size:11px;font-weight:700">'
+        '\u26a0 \u53ea\u5356\u4e0d\u4e70</span>'
+    ) if plan.only_sell else ""
+
+    return f'''<div class="card" style="border-color:#8b5cf6aa">
+  <div style="color:#a78bfa;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:14px">
+    \U0001f4ca Hybrid \u56db\u5c42\u8d44\u91d1\u5206\u914d{only_sell_badge}
+  </div>
+  <div style="margin-bottom:16px">
+    <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+      <span style="color:#64748b;font-size:12px">\u4f4d\u7f6e\u523b\u5ea6</span>
+      <span style="color:{fg};font-size:14px;font-weight:700">{pct_str}
+        <span style="background:{bg};color:{fg};padding:2px 8px;border-radius:8px;font-size:11px;margin-left:6px;border:1px solid {fg}40">{band}</span>
+      </span>
+    </div>
+    <div style="background:#0f172a;border-radius:6px;height:8px;overflow:hidden">
+      <div style="background:{fg};height:100%;width:{pct_val}%;border-radius:6px"></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;margin-top:4px;font-size:10px;color:#475569">
+      <span>0% \u4f4e\u4f4d</span><span>30%</span><span>70%</span><span>85%</span><span>100% \u9ad8\u4f4d</span>
+    </div>
+  </div>
+  <div style="display:flex;gap:12px;flex-wrap:wrap">
+    <div style="background:#1c2a3a;border-radius:8px;padding:12px 16px;flex:1;min-width:100px">
+      <div style="color:#a78bfa;font-size:11px;margin-bottom:2px">\u5e95\u4ed3\u9501\u5b9a (40%)</div>
+      <div style="color:#e2e8f0;font-size:18px;font-weight:700">\u00a5{plan.base_budget:,.0f}</div>
+      <div style="color:#475569;font-size:10px">\u4e0d\u53c2\u4e0e\u7f51\u683c</div>
+    </div>
+    <div style="background:#1c2a3a;border-radius:8px;padding:12px 16px;flex:1;min-width:100px">
+      <div style="color:#60a5fa;font-size:11px;margin-bottom:2px">\u7f51\u683c\u5c42\u9884\u7b97</div>
+      <div style="color:#e2e8f0;font-size:18px;font-weight:700">\u00a5{plan.swing_budget:,.0f}</div>
+      <div style="color:#475569;font-size:10px">\u6309\u4f4d\u7f6e\u7f29\u653e</div>
+    </div>
+    <div style="background:#1c2a3a;border-radius:8px;padding:12px 16px;flex:1;min-width:100px">
+      <div style="color:#f87171;font-size:11px;margin-bottom:2px">\u73b0\u91d1\u5730\u677f (20%)</div>
+      <div style="color:#e2e8f0;font-size:18px;font-weight:700">\u00a5{plan.cash_floor:,.0f}</div>
+      <div style="color:#475569;font-size:10px">\u786c\u4e0b\u9650\u4fdd\u62a4</div>
+    </div>
+    <div style="background:#1c2a3a;border-radius:8px;padding:12px 16px;flex:1;min-width:100px">
+      <div style="color:#94a3b8;font-size:11px;margin-bottom:2px">\u603b\u8d44\u4ea7\u53c2\u8003</div>
+      <div style="color:#e2e8f0;font-size:18px;font-weight:700">\u00a5{plan.total_equity:,.0f}</div>
+      <div style="color:#475569;font-size:10px">\u6301\u4ed3+\u73b0\u91d1</div>
     </div>
   </div>
 </div>'''

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 
 @dataclass(slots=True)
@@ -46,6 +46,83 @@ class GridConfig:
     # -- reference ladder --
     ladder_tranches: int = 3
 
+    # ---- Phase 4: Trend-Hybrid 分层（默认全关闭，零侵入现有行为）----
+    trend_hybrid_enabled: bool = False
+    base_position_ratio: float = 0.0   # 底仓占总资产比例（0-1）
+    cash_floor_ratio: float = 0.0      # 现金地板占总资产比例（0-1）
+
+    # 位置分位窗口 + 分档阈值（刻度 0-100）
+    position_window: int = 60
+    position_band_low: float = 30.0    # <low：低位，swing 资金满用
+    position_band_mid: float = 70.0    # [low, mid)：中段正常
+    position_band_high: float = 85.0   # [mid, high)：偏高减仓；>=high：只卖不买
+
+    # 每一档下「网格层预算」乘数
+    position_alloc_low: float = 1.0
+    position_alloc_mid_low: float = 0.67
+    position_alloc_mid_high: float = 0.33
+    position_alloc_high: float = 0.0   # 只卖不买
+
+    # 应急补仓通道
+    emergency_refill_drop_pct: float = 0.10
+    emergency_refill_lookback: int = 20
+    emergency_refill_use_ratio: float = 0.5
+
 
 # Singleton default config for convenience.
 DEFAULT_CONFIG = GridConfig()
+
+
+# ---------------------------------------------------------------------------
+# 参数 profile 工厂
+# ---------------------------------------------------------------------------
+_PROFILES: dict[str, dict[str, float | int | bool]] = {
+    "stable": {},
+    "dev": {
+        "regime_ma_lookback": 7,
+        "regime_slope_threshold": 0.35,
+        "step_min_fraction": 1 / 6,
+    },
+    "aggressive": {
+        "regime_ma_lookback": 7,
+        "regime_slope_threshold": 0.40,
+        "step_min_fraction": 1 / 5,
+        "grid_level_count": 4,
+    },
+    "balanced": {
+        "reference_tranche_shares": 300,
+    },
+    "yield": {
+        "reference_tranche_shares": 400,
+        "step_max_fraction": 1 / 4,
+    },
+    "trend_hybrid": {
+        "reference_tranche_shares": 300,
+        "trend_hybrid_enabled": True,
+        "base_position_ratio": 0.40,
+        "cash_floor_ratio": 0.20,
+        "position_window": 60,
+        "position_band_low": 30.0,
+        "position_band_mid": 70.0,
+        "position_band_high": 85.0,
+        "position_alloc_low": 1.0,
+        "position_alloc_mid_low": 0.67,
+        "position_alloc_mid_high": 0.33,
+        "position_alloc_high": 0.0,
+        "emergency_refill_drop_pct": 0.10,
+        "emergency_refill_lookback": 20,
+        "emergency_refill_use_ratio": 0.5,
+    },
+}
+
+
+def for_profile(name: str = "stable", **overrides) -> GridConfig:
+    """Return a GridConfig tuned for a named profile."""
+    preset = _PROFILES.get(name, {})
+    merged: dict[str, float | int | bool] = {**preset, **overrides}
+    return replace(GridConfig(), **merged) if merged else GridConfig()
+
+
+def available_profiles() -> list[str]:
+    """Return the list of registered profile names."""
+    return sorted(_PROFILES.keys())

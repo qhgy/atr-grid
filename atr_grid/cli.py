@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .engine import generate_plan, replay_symbol
+from .config import for_profile, available_profiles
 from .report import (
     build_notify_content,
     default_report_paths,
@@ -28,6 +29,7 @@ def build_parser() -> argparse.ArgumentParser:
     plan_parser = subparsers.add_parser("plan", help="生成单个 ETF 的 ATR 网格计划")
     plan_parser.add_argument("symbol", help="ETF 代码，如 SH515880 或 515880")
     plan_parser.add_argument("--shares", type=int, default=2000, help="参考持仓股数")
+    plan_parser.add_argument("--profile", default="stable", choices=available_profiles(), help="策略 profile")
     plan_parser.add_argument("--json-out", help="JSON 输出文件路径")
     plan_parser.add_argument("--md-out", help="Markdown 输出文件路径")
     plan_parser.add_argument("--no-save", action="store_true", help="只打印结果，不自动保存默认报告")
@@ -42,6 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
     multi_parser = subparsers.add_parser("multi", help="生成多个 ETF 的汇总 Dashboard")
     multi_parser.add_argument("symbols", nargs="+", help="ETF 代码列表，空格分隔")
     multi_parser.add_argument("--shares", type=int, default=2000, help="参考持仓股数")
+    multi_parser.add_argument("--profile", default="stable", choices=available_profiles(), help="策略 profile")
     multi_parser.add_argument("--notify", action="store_true", help="有临近档位的标的推送通知")
     multi_parser.add_argument("--notify-always", action="store_true", help="推送所有标的的通知")
 
@@ -54,7 +57,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "plan":
-        plan = generate_plan(args.symbol, shares=args.shares)
+        cfg = for_profile(args.profile)
+        plan = generate_plan(args.symbol, shares=args.shares, cfg=cfg)
         print(_plan_summary(plan))
         json_target, md_target = _resolve_output_paths(plan, args.json_out, args.md_out, args.no_save)
         if json_target is not None:
@@ -69,10 +73,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "multi":
+        cfg = for_profile(args.profile)
         plans = []
         for sym in args.symbols:
             try:
-                p = generate_plan(sym, shares=args.shares)
+                p = generate_plan(sym, shares=args.shares, cfg=cfg)
                 plans.append(p)
                 print(_plan_summary(p))
             except Exception as exc:

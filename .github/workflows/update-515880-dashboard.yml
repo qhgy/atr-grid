@@ -1,0 +1,78 @@
+name: Update 515880 Hybrid Dashboard
+
+on:
+  push:
+    branches:
+      - dev
+    paths:
+      - 'atr_grid/**'
+      - '.github/workflows/update-515880-dashboard.yml'
+  schedule:
+    # 09:12 Beijing time (UTC+8) on weekdays → 01:12 UTC
+    - cron: '12 1 * * 1-5'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: atr-grid-515880-dashboard
+  cancel-in-progress: true
+
+jobs:
+  update-515880-dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout dev source
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          path: dev-src
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        working-directory: dev-src
+        run: uv sync
+
+      - name: Generate 515880 hybrid dashboard
+        working-directory: dev-src
+        env:
+          XUEQIUTOKEN: ${{ secrets.XUEQIUTOKEN }}
+        run: |
+          mkdir -p output
+          uv run python -m atr_grid multi SH515880 --profile trend_hybrid
+
+      - name: Checkout Pages source
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: pages-main
+
+      - name: Update docs/515880
+        run: |
+          cd pages-main
+          git pull --ff-only origin main
+          cd ..
+
+          TODAY=$(TZ=Asia/Shanghai date '+%Y-%m-%d')
+          mkdir -p pages-main/docs/515880/snapshots
+          cp dev-src/output/atr_grid.html pages-main/docs/515880/index.html
+          if [ -d dev-src/output/snapshots ]; then
+            cp dev-src/output/snapshots/*.html pages-main/docs/515880/snapshots/ 2>/dev/null || true
+          fi
+          cp dev-src/output/atr_grid.html "pages-main/docs/515880/snapshots/${TODAY}.html"
+
+      - name: Commit and push 515880 dashboard
+        working-directory: pages-main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/515880/
+          if git diff --staged --quiet; then
+            echo "No 515880 dashboard changes."
+          else
+            git commit -m "chore: update 515880 hybrid dashboard $(TZ=Asia/Shanghai date '+%Y-%m-%d')"
+            git push origin HEAD:main
+          fi

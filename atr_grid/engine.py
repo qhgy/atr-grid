@@ -56,6 +56,15 @@ class GridPlan:
     trim_shares: int
     rebuy_price: float | None
     shares: int
+    # -- hybrid fields (Phase 4) --
+    hybrid_enabled: bool = False
+    position_pct: float | None = None
+    position_band: str = ""
+    base_budget: float = 0.0
+    swing_budget: float = 0.0
+    cash_floor: float = 0.0
+    only_sell: bool = False
+    total_equity: float = 0.0
     warnings: list[str] = field(default_factory=list)
 
 
@@ -110,7 +119,44 @@ def build_plan_from_context(context: MarketContext, cfg: GridConfig = DEFAULT_CO
     snapshot = latest_snapshot(frame)
     regime = classify_regime(frame, snapshot, cfg)
     diagnostics = _build_grid_diagnostics(frame, context.price_precision, cfg)
-    return _assemble_plan(context, snapshot, regime, cfg, diagnostics=diagnostics)
+    plan = _assemble_plan(context, snapshot, regime, cfg, diagnostics=diagnostics)
+    # Hybrid overlay (Phase 4)
+    if cfg.trend_hybrid_enabled:
+        plan = _apply_hybrid_overlay(plan, frame, cfg)
+    return plan
+
+
+def _apply_hybrid_overlay(plan: GridPlan, frame, cfg: GridConfig) -> GridPlan:
+    """Compute hybrid capital allocation and attach to plan."""
+    from .hybrid import position_percentile, compute_capital_allocation
+
+    pct = position_percentile(frame, window=cfg.position_window)
+    # Use a reference total equity based on shares * current_price * 2.5
+    # (rough estimate: position value + cash reserve)
+    total_equity = plan.shares * plan.current_price * 2.5
+    alloc = compute_capital_allocation(total_equity, pct, cfg)
+
+    plan.hybrid_enabled = True
+    plan.position_pct = round(pct, 1) if pct is not None else None
+    plan.position_band = alloc.band.name
+    plan.base_budget = round(alloc.base_budget, 2)
+    plan.swing_budget = round(alloc.swing_budget, 2)
+    plan.cash_floor = round(alloc.cash_floor, 2)
+    plan.only_sell = alloc.only_sell
+    plan.total_equity = round(total_equity, 2)
+
+    # If in high band (only_sell), override headline
+    if alloc.only_sell and plan.mode != "trend_avoid":
+        plan.headline_action = (
+            f"位置刻度 {plan.position_pct}%（{alloc.band.name} 档），"
+            f"当前只卖不买。底仓 ¥{plan.base_budget:,.0f} 不动，"
+            f"网格层预算 ¥{plan.swing_budget:,.0f}。"
+        )
+        plan.strategy_name = "Hybrid 高位止盈（只卖不买）"
+    elif cfg.trend_hybrid_enabled:
+        plan.strategy_name = f"Hybrid {alloc.band.name} 档 · {plan.strategy_name}"
+
+    return plan
 
 
 def _assemble_plan(
