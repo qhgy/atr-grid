@@ -27,6 +27,9 @@ class GridConfig:
     # -- regime detection --
     regime_ma_lookback: int = 5
     regime_slope_threshold: float = 0.25
+    atr_alert_3d_pct: float = 10.0
+    atr_alert_5d_pct: float = 15.0
+    step_change_alert_pct: float = 5.0
 
     # -- grid step boundaries (as fraction of band width) --
     step_min_fraction: float = 1 / 8  # band_width / 8

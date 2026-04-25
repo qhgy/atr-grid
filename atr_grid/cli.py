@@ -109,6 +109,8 @@ def _plan_summary(plan) -> str:
             f"机械接回网格：{fmt_levels(plan.reference_rebuy_ladder)}",
             f"趋势修正：最多卖 {plan.trend_sell_limit_shares} 股（{plan.trend_sell_limit_tranches} 档）",
             f"趋势说明：{plan.trend_adjustment_note}",
+            f"波动提示：{plan.volatility_note}",
+            f"间距说明：{plan.spacing_note}",
             f"主买点：{buy_text} | 主卖点：{sell_text}",
             f"建议减仓：{trim_text} | 建议接回：{rebuy_text}",
             f"失效下沿：{lower_text} | 突破上沿：{upper_text}",

@@ -91,6 +91,8 @@ def render_markdown(plan: GridPlan) -> str:
         f"- 当前模式：`{_translate_mode(plan.mode)}`",
         f"- 策略名称：`{plan.strategy_name}`",
         f"- 现在该做什么：{plan.headline_action}",
+        f"- 波动提示：{plan.volatility_note}",
+        f"- 间距说明：{plan.spacing_note}",
         f"- 结论：{plan.reason}",
         "",
         "## 操作卡片",
@@ -130,6 +132,8 @@ def render_markdown(plan: GridPlan) -> str:
         "## 市场状态判断",
         "",
         f"- ATR14：¥{_fmt(snapshot.atr14, 3)}",
+        f"- ATR14 变化：近3日 {_fmt_pct(plan.atr_change_3d_pct)} / 近5日 {_fmt_pct(plan.atr_change_5d_pct)}",
+        f"- 波动提示：{plan.volatility_note}",
         f"- Boll 上轨 / 中轨 / 下轨：¥{_fmt(snapshot.bb_upper, 3)} / ¥{_fmt(snapshot.bb_middle, 3)} / ¥{_fmt(snapshot.bb_lower, 3)}",
         f"- MA20 / MA60：¥{_fmt(snapshot.ma20, 3)} / ¥{_fmt(snapshot.ma60, 3)}",
         f"- 说明：{plan.reason}",
@@ -138,6 +142,9 @@ def render_markdown(plan: GridPlan) -> str:
         "",
         f"- 中枢：{_fmt_price(plan.center)}",
         f"- 步长：{_fmt_price(plan.step)}",
+        f"- 上一交易日步长：{_fmt_price(plan.previous_step)}",
+        f"- 步长变化：{_fmt_pct(plan.step_change_pct)}",
+        f"- 间距说明：{plan.spacing_note}",
         f"- 主买点：{_fmt_price(plan.primary_buy)}",
         f"- 主卖点：{_fmt_price(plan.primary_sell)}",
         f"- 建议减仓股数：{plan.trim_shares if plan.trim_shares else '无'}",
@@ -263,6 +270,12 @@ def _fmt(value: float | None, precision: int) -> str:
     if value is None:
         return "N/A"
     return f"{value:.{precision}f}"
+
+
+def _fmt_pct(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    return f"{value:+.2f}%"
 
 
 def _fmt_price(value: float | None) -> str:
@@ -396,6 +409,8 @@ def build_notify_content(plan: GridPlan) -> tuple[str, str]:
         "",
         f"**动作**：{plan.headline_action}",
         f"**结论**：{plan.reason}",
+        f"**波动**：{plan.volatility_note}",
+        f"**间距**：{plan.spacing_note}",
         "",
         f"主买点：{buy_text}　主卖点：{sell_text}",
         "",
@@ -476,6 +491,7 @@ def render_html(plan: GridPlan, *, paper_state: dict | None = None) -> str:
 
     # Indicators
     indicators_html = _html_indicators(snap)
+    diagnostics_html = _html_diagnostics(plan)
 
     # Risk boundaries
     risk_html = _html_risk(plan)
@@ -544,6 +560,8 @@ def render_html(plan: GridPlan, *, paper_state: dict | None = None) -> str:
     {action_steps_html}
   </div>
 </div>
+
+{diagnostics_html}
 
 <!-- Sell Ladder -->
 <div class="card">
@@ -698,6 +716,30 @@ def _html_indicators(snap) -> str:
         + cells
         + "</div>"
     )
+
+
+def _html_diagnostics(plan: GridPlan) -> str:
+    atr_3d = _fmt_pct(plan.atr_change_3d_pct)
+    atr_5d = _fmt_pct(plan.atr_change_5d_pct)
+    prev_step = _fmt_price(plan.previous_step)
+    step = _fmt_price(plan.step)
+    step_change = _fmt_pct(plan.step_change_pct)
+    return f'''<div class="card" style="border-color:#38bdf8aa">
+  <div style="color:#7dd3fc;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">🌊 波动与间距</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:12px">
+    <div style="background:#0f2537;border-radius:10px;padding:12px">
+      <div style="color:#67e8f9;font-size:12px;margin-bottom:4px">ATR14 变化</div>
+      <div style="color:#e0f2fe;font-size:16px;font-weight:700">3日 {atr_3d} · 5日 {atr_5d}</div>
+    </div>
+    <div style="background:#0f2537;border-radius:10px;padding:12px">
+      <div style="color:#67e8f9;font-size:12px;margin-bottom:4px">网格间距</div>
+      <div style="color:#e0f2fe;font-size:16px;font-weight:700">{prev_step} → {step}</div>
+      <div style="color:#94a3b8;font-size:12px;margin-top:2px">变化 {step_change}</div>
+    </div>
+  </div>
+  <p style="color:#dbeafe;font-size:14px;line-height:1.6;margin-bottom:8px">{plan.volatility_note}</p>
+  <p style="color:#cbd5e1;font-size:14px;line-height:1.6">{plan.spacing_note}</p>
+</div>'''
 
 
 def _html_risk(plan: GridPlan) -> str:
