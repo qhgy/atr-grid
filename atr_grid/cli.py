@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import argparse
 import os
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
+
+_BJT = timezone(timedelta(hours=8))
 
 from .engine import generate_plan, replay_symbol
 from .config import for_profile, available_profiles
@@ -177,8 +179,8 @@ def _write_multi_html(plans: list) -> Path:
     from .report import render_html, _load_paper_state  # local import to avoid circular
     from core.paths import project_path
 
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-    today = datetime.now().strftime("%Y-%m-%d")
+    now_str = datetime.now(_BJT).strftime("%Y-%m-%d %H:%M")
+    today = datetime.now(_BJT).strftime("%Y-%m-%d")
     sections = []
     summary_rows = []
 

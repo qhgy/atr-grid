@@ -7,9 +7,11 @@ import json
 import sys
 import urllib.parse
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Sequence
+
+_BJT = timezone(timedelta(hours=8))
 
 from core.paths import project_path
 
@@ -164,7 +166,7 @@ def render_markdown(plan: GridPlan) -> str:
 
 def default_report_paths(plan: GridPlan) -> tuple[Path, Path]:
     """Return default JSON and Markdown output paths under the project report directory."""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(_BJT).strftime("%Y%m%d_%H%M%S")
     report_dir = project_path("output", "atr_grid_reports")
     base_name = f"{plan.symbol}_atr_grid_{timestamp}"
     return report_dir / f"{base_name}.json", report_dir / f"{base_name}.md"
@@ -172,7 +174,7 @@ def default_report_paths(plan: GridPlan) -> tuple[Path, Path]:
 
 def default_csv_report_path(plan: GridPlan) -> Path:
     """Return the default CSV output path under the project report directory."""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(_BJT).strftime("%Y%m%d_%H%M%S")
     report_dir = project_path("output", "atr_grid_reports")
     base_name = f"{plan.symbol}_atr_grid_{timestamp}"
     return report_dir / f"{base_name}.csv"
@@ -465,7 +467,7 @@ def _load_paper_state(symbol: str) -> dict | None:
 
 def render_html(plan: GridPlan, *, paper_state: dict | None = None) -> str:
     """Render a self-contained HTML trading dashboard for *plan*."""
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now_str = datetime.now(_BJT).strftime("%Y-%m-%d %H:%M")
     snap = plan.snapshot
 
     # Price change vs last close
