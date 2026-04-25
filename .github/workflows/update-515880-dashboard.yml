@@ -8,10 +8,8 @@ on:
       - 'atr_grid/**'
       - '.github/workflows/update-515880-dashboard.yml'
   schedule:
-    # 工作日盘中多次更新（北京时间 → UTC）
-    - cron: '22 1 * * 1-5'   # 09:22 开盘前
-    - cron: '30 3 * * 1-5'   # 11:30 午盘收盘
-    - cron: '0 7 * * 1-5'    # 15:00 收盘后
+    # 每小时一次，覆盖 A 股交易时段 09:00-15:00 BJT (01:00-07:00 UTC)
+    - cron: '0 1-7 * * 1-5'
   workflow_dispatch:
 
 permissions:
@@ -38,7 +36,39 @@ jobs:
         working-directory: dev-src
         run: uv sync
 
+      - name: Proximity gate (5% check)
+        id: gate
+        if: github.event_name == 'schedule'
+        working-directory: dev-src
+        env:
+          XUEQIUTOKEN: ${{ secrets.XUEQIUTOKEN }}
+        run: |
+          NEAR=$(uv run python -c "
+          import sys
+          from atr_grid.config import for_profile
+          from atr_grid.engine import generate_plan
+          cfg = for_profile('trend_hybrid')
+          try:
+              plan = generate_plan('SH515880', shares=2000, cfg=cfg)
+          except Exception:
+              print('true')  # 拿不到数据时保守放行
+              sys.exit(0)
+          price = plan.current_price
+          targets = [t for t in [
+              plan.primary_sell, plan.primary_buy,
+              plan.lower_invalidation, plan.upper_breakout,
+              *plan.reference_sell_ladder, *plan.reference_rebuy_ladder,
+          ] if t is not None]
+          near = any(abs(price - t) / price < 0.05 for t in targets)
+          print('true' if near else 'false')
+          ")
+          echo "near=$NEAR" >> $GITHUB_OUTPUT
+          echo "Proximity check: $NEAR"
+
       - name: Generate 515880 hybrid dashboard
+        if: >-
+          github.event_name != 'schedule'
+          || steps.gate.outputs.near == 'true'
         working-directory: dev-src
         env:
           XUEQIUTOKEN: ${{ secrets.XUEQIUTOKEN }}
@@ -47,12 +77,18 @@ jobs:
           uv run python -m atr_grid multi SH515880 --profile trend_hybrid
 
       - name: Checkout Pages source
+        if: >-
+          github.event_name != 'schedule'
+          || steps.gate.outputs.near == 'true'
         uses: actions/checkout@v4
         with:
           ref: main
           path: pages-main
 
       - name: Update docs/515880
+        if: >-
+          github.event_name != 'schedule'
+          || steps.gate.outputs.near == 'true'
         run: |
           cd pages-main
           git pull --ff-only origin main
@@ -67,6 +103,9 @@ jobs:
           cp dev-src/output/atr_grid.html "pages-main/docs/515880/snapshots/${TODAY}.html"
 
       - name: Commit and push 515880 dashboard
+        if: >-
+          github.event_name != 'schedule'
+          || steps.gate.outputs.near == 'true'
         working-directory: pages-main
         run: |
           git config user.name "github-actions[bot]"
@@ -75,6 +114,6 @@ jobs:
           if git diff --staged --quiet; then
             echo "No 515880 dashboard changes."
           else
-            git commit -m "chore: update 515880 hybrid dashboard $(TZ=Asia/Shanghai date '+%Y-%m-%d')"
+            git commit -m "chore: update 515880 hybrid dashboard $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M')"
             git push origin HEAD:main
           fi
