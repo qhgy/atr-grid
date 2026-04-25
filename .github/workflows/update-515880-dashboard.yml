@@ -8,8 +8,10 @@ on:
       - 'atr_grid/**'
       - '.github/workflows/update-515880-dashboard.yml'
   schedule:
-    # 09:12 Beijing time (UTC+8) on weekdays → 01:12 UTC
-    - cron: '12 1 * * 1-5'
+    # 工作日盘中多次更新（北京时间 → UTC）
+    - cron: '22 1 * * 1-5'   # 09:22 开盘前
+    - cron: '30 3 * * 1-5'   # 11:30 午盘收盘
+    - cron: '0 7 * * 1-5'    # 15:00 收盘后
   workflow_dispatch:
 
 permissions:
