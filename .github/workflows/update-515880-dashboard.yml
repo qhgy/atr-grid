@@ -11,6 +11,11 @@ on:
     # 每小时一次，覆盖 A 股交易时段 09:00-15:00 BJT (01:00-07:00 UTC)
     - cron: '0 1-7 * * 1-5'
   workflow_dispatch:
+    inputs:
+      profile:
+        description: 'Strategy profile (default: trend_hybrid)'
+        required: false
+        default: 'trend_hybrid'
 
 permissions:
   contents: write
