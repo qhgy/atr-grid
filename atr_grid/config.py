@@ -68,6 +68,18 @@ class GridConfig:
     emergency_refill_lookback: int = 20
     emergency_refill_use_ratio: float = 0.5
 
+    # ---- MacroRsi14HardV2 信号引擎参数 ----
+    signal_grid_levels: int = 8          # 网格档位数
+    signal_grid_atr_mult: float = 0.7    # 网格步长 = ATR14 × 此倍数
+    signal_rsi_oversold: float = 30.0    # RSI 超卖阈值（加倍买）
+    signal_rsi_overbought: float = 75.0  # RSI 超买阈值（加倍卖）
+    signal_rsi_multiplier: float = 2.5   # RSI 极端时的下单倍数
+    signal_nvda_hard_threshold: float = -5.0   # NVDA 跌幅触发清仓
+    signal_nvda_cautious_threshold: float = -4.0  # NVDA 跌幅触发减仓
+    signal_cautious_target_pct: float = 0.6   # 减仓后目标仓位比例
+    signal_cautious_buy_scale: float = 0.5    # 警戒时买单缩减比例
+    signal_initial_capital: float = 100_000.0  # 信号引擎模拟初始资金
+
 
 # Singleton default config for convenience.
 DEFAULT_CONFIG = GridConfig()

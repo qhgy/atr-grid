@@ -11,21 +11,11 @@ from datetime import datetime, timezone, timedelta
 import numpy as np
 import pandas as pd
 
+from .config import DEFAULT_CONFIG, GridConfig
 from .data import load_market_context
 from .indicators import build_indicator_frame, _as_float
 
 _BJT = timezone(timedelta(hours=8))
-
-GRID_LEVELS = 8
-GRID_ATR_MULT = 0.7
-RSI_OVERSOLD = 30
-RSI_OVERBOUGHT = 75
-RSI_MULTIPLIER = 2.5
-NVDA_HARD_THRESHOLD = -5
-NVDA_CAUTIOUS_THRESHOLD = -4
-CAUTIOUS_TARGET_PCT = 0.6
-CAUTIOUS_BUY_SCALE = 0.5
-INITIAL_CAPITAL = 100000
 
 
 @dataclass
@@ -79,7 +69,7 @@ def _fetch_nvda_return() -> float | None:
     return None
 
 
-def generate_signal(*, disable_nvda: bool = False) -> SignalResult:
+def generate_signal(*, disable_nvda: bool = False, cfg: GridConfig = DEFAULT_CONFIG) -> SignalResult:
     """Generate daily grid signal for 515880."""
     ctx = load_market_context("SH515880", kline_count=100)
     frame = build_indicator_frame(ctx.rows)
@@ -97,28 +87,28 @@ def generate_signal(*, disable_nvda: bool = False) -> SignalResult:
 
     risk_action = "正常"
     if nvda_ret is not None:
-        if nvda_ret < NVDA_HARD_THRESHOLD:
+        if nvda_ret < cfg.signal_nvda_hard_threshold:
             risk_action = "全部清仓+冻结2天"
-        elif nvda_ret < NVDA_CAUTIOUS_THRESHOLD:
+        elif nvda_ret < cfg.signal_nvda_cautious_threshold:
             risk_action = "减仓到60%"
 
     rsi_state = "正常"
     buy_mult = 1.0
     sell_mult = 1.0
     if rsi14 is not None:
-        if rsi14 < RSI_OVERSOLD:
-            rsi_state = f"超卖加倍(×{RSI_MULTIPLIER})"
-            buy_mult = RSI_MULTIPLIER
-        elif rsi14 > RSI_OVERBOUGHT:
-            rsi_state = f"超买加倍(×{RSI_MULTIPLIER})"
-            sell_mult = RSI_MULTIPLIER
+        if rsi14 < cfg.signal_rsi_oversold:
+            rsi_state = f"超卖加倍(×{cfg.signal_rsi_multiplier})"
+            buy_mult = cfg.signal_rsi_multiplier
+        elif rsi14 > cfg.signal_rsi_overbought:
+            rsi_state = f"超买加倍(×{cfg.signal_rsi_multiplier})"
+            sell_mult = cfg.signal_rsi_multiplier
 
-    grid_step = atr14 * GRID_ATR_MULT if atr14 else 0
-    base_budget = INITIAL_CAPITAL * 0.8
+    grid_step = atr14 * cfg.signal_grid_atr_mult if atr14 else 0
+    base_budget = cfg.signal_initial_capital * 0.8
     base_shares = int(base_budget / close) if close > 0 else 0
-    per_grid = max((base_shares // GRID_LEVELS // 100) * 100, 100)
+    per_grid = max((base_shares // cfg.signal_grid_levels // 100) * 100, 100)
 
-    buy_scale = CAUTIOUS_BUY_SCALE if risk_action == "减仓到60%" else 1.0
+    buy_scale = cfg.signal_cautious_buy_scale if risk_action == "减仓到60%" else 1.0
 
     buy_orders = []
     sell_orders = []
@@ -127,7 +117,7 @@ def generate_signal(*, disable_nvda: bool = False) -> SignalResult:
         sell_orders = [GridOrder(0, "sell", close, 0, "NVDA暴跌 → 全部清仓")]
     else:
         position = max(int(per_grid * buy_mult * buy_scale // 100) * 100, 100)
-        for level in range(1, GRID_LEVELS + 1):
+        for level in range(1, cfg.signal_grid_levels + 1):
             buy_price = round(close - grid_step * level, 3)
             if buy_price > 0:
                 note = ""
@@ -138,7 +128,7 @@ def generate_signal(*, disable_nvda: bool = False) -> SignalResult:
                 buy_orders.append(GridOrder(level, "buy", buy_price, position, note))
 
         sell_shares = max(int(per_grid * sell_mult // 100) * 100, 100)
-        for level in range(1, GRID_LEVELS + 1):
+        for level in range(1, cfg.signal_grid_levels + 1):
             sell_price = round(close + grid_step * level, 3)
             note = "RSI超买加倍" if rsi_state.startswith("超买") else ""
             sell_orders.append(GridOrder(level, "sell", sell_price, sell_shares, note))
