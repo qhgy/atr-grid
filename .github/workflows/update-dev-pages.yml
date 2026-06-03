@@ -1,0 +1,111 @@
+name: Update Dev Pages
+
+on:
+  schedule:
+    # Weekdays during A-share market hours: 09:10-15:10 Beijing time.
+    # GitHub scheduled workflows must live on the default branch, so this
+    # workflow is kept on main while it explicitly checks out dev source.
+    - cron: '10 1-7 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      symbols:
+        description: 'ETF symbols space-separated for /dev/'
+        required: false
+        default: 'SH515880 SH513500 SZ159915'
+      profile:
+        description: 'Profile for /dev/515880/'
+        required: false
+        default: 'trend_hybrid'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: atr-grid-dev-pages
+  cancel-in-progress: true
+
+jobs:
+  update-dev-pages:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout dev source
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          path: dev-src
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        working-directory: dev-src
+        run: uv sync
+
+      - name: Generate dev multi dashboard
+        working-directory: dev-src
+        env:
+          XUEQIUTOKEN: ${{ secrets.XUEQIUTOKEN }}
+        run: |
+          SYMBOLS="${{ github.event.inputs.symbols || 'SH515880 SH513500 SZ159915' }}"
+          mkdir -p output/dev-multi
+          uv run python -m atr_grid multi $SYMBOLS
+          cp output/atr_grid.html output/dev-multi/index.html
+          if [ -d output/snapshots ]; then
+            mkdir -p output/dev-multi/snapshots
+            cp output/snapshots/*.html output/dev-multi/snapshots/ 2>/dev/null || true
+          fi
+
+      - name: Generate dev 515880 dashboard
+        working-directory: dev-src
+        env:
+          XUEQIUTOKEN: ${{ secrets.XUEQIUTOKEN }}
+        run: |
+          PROFILE="${{ github.event.inputs.profile || 'trend_hybrid' }}"
+          mkdir -p output/dev-515880
+          uv run python -m atr_grid multi SH515880 --profile "$PROFILE"
+          cp output/atr_grid.html output/dev-515880/index.html
+          if [ -d output/snapshots ]; then
+            mkdir -p output/dev-515880/snapshots
+            cp output/snapshots/*.html output/dev-515880/snapshots/ 2>/dev/null || true
+          fi
+
+      - name: Checkout Pages source
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: pages-main
+
+      - name: Update docs/dev
+        run: |
+          cd pages-main
+          git pull --ff-only origin main
+          cd ..
+
+          TODAY=$(TZ=Asia/Shanghai date '+%Y-%m-%d')
+
+          mkdir -p pages-main/docs/dev/snapshots
+          cp dev-src/output/dev-multi/index.html pages-main/docs/dev/index.html
+          if [ -d dev-src/output/dev-multi/snapshots ]; then
+            cp dev-src/output/dev-multi/snapshots/*.html pages-main/docs/dev/snapshots/ 2>/dev/null || true
+          fi
+          cp dev-src/output/dev-multi/index.html "pages-main/docs/dev/snapshots/${TODAY}.html"
+
+          mkdir -p pages-main/docs/dev/515880/snapshots
+          cp dev-src/output/dev-515880/index.html pages-main/docs/dev/515880/index.html
+          if [ -d dev-src/output/dev-515880/snapshots ]; then
+            cp dev-src/output/dev-515880/snapshots/*.html pages-main/docs/dev/515880/snapshots/ 2>/dev/null || true
+          fi
+          cp dev-src/output/dev-515880/index.html "pages-main/docs/dev/515880/snapshots/${TODAY}.html"
+
+      - name: Commit and push dev pages
+        working-directory: pages-main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/dev/
+          if git diff --staged --quiet; then
+            echo "No dev page changes."
+          else
+            git commit -m "chore: update dev pages $(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M')"
+            git push origin HEAD:main
+          fi
