@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import sys
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -52,11 +53,18 @@ def _load_cookie_from_path(candidate_path: Path | None) -> str | None:
 
 def parse_cookie_text(raw_text: str) -> str:
     """Normalize either a raw cookie header or a Netscape cookie file."""
-    if "# Netscape HTTP Cookie File" not in raw_text:
-        return raw_text.strip()
+    text = raw_text.strip()
+    if not text:
+        return ""
+    if text.startswith("["):
+        parsed = _parse_cookie_editor_json(text)
+        if parsed:
+            return parsed
+    if "# Netscape HTTP Cookie File" not in text:
+        return text
 
     pairs: list[str] = []
-    for line in raw_text.splitlines():
+    for line in text.splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
@@ -65,6 +73,28 @@ def parse_cookie_text(raw_text: str) -> str:
             continue
         domain, _, _, _, _, name, value = parts[:7]
         if "xueqiu.com" not in domain:
+            continue
+        pairs.append(f"{name}={value}")
+    return "; ".join(pairs).strip()
+
+
+def _parse_cookie_editor_json(raw_text: str) -> str:
+    """Parse Cookie Editor-style JSON exports into a Cookie header."""
+    try:
+        rows = json.loads(raw_text)
+    except json.JSONDecodeError:
+        return ""
+    if not isinstance(rows, list):
+        return ""
+
+    pairs: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        domain = str(row.get("domain", ""))
+        name = row.get("name")
+        value = row.get("value")
+        if "xueqiu.com" not in domain or not name or value is None:
             continue
         pairs.append(f"{name}={value}")
     return "; ".join(pairs).strip()

@@ -4,10 +4,18 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 _BJT = timezone(timedelta(hours=8))
+
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
 
 from .engine import generate_plan, replay_symbol
 from .config import for_profile, available_profiles
