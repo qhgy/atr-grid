@@ -1,0 +1,113 @@
+name: 515880 Signal
+
+on:
+  schedule:
+    # 北京时间 11:37 午盘巡检（03:37 UTC）、15:07 收盘巡检（07:07 UTC），仅交易日
+    - cron: '37 3 * * 1-5'
+    - cron: '7 7 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      session:
+        description: '场次标注（午盘/收盘/手动）'
+        required: false
+        default: '手动'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dev-515880-signal
+  cancel-in-progress: false
+
+jobs:
+  signal:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout dev source
+        uses: actions/checkout@v4
+        with:
+          ref: dev
+          path: dev-src
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        working-directory: dev-src
+        run: uv sync
+
+      - name: Determine session label
+        id: label
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            LABEL="${{ github.event.inputs.session }}"
+          elif [ $(date -u +%H) -lt 5 ]; then
+            LABEL="午盘"
+          else
+            LABEL="收盘"
+          fi
+          echo "label=$LABEL" >> $GITHUB_OUTPUT
+          echo "stamp=$(TZ=Asia/Shanghai date '+%Y-%m-%d %H:%M')" >> $GITHUB_OUTPUT
+          echo "today=$(TZ=Asia/Shanghai date '+%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: Run signal
+        working-directory: dev-src
+        env:
+          XUEQIUTOKEN: ${{ secrets.XUEQIUTOKEN }}
+        run: |
+          uv run python -m dev signal | tee signal.txt
+
+      - name: Build HTML
+        run: |
+          python3 - <<'EOF'
+          import html, pathlib
+          text = pathlib.Path('dev-src/signal.txt').read_text(encoding='utf-8')
+          label = "${{ steps.label.outputs.label }}"
+          stamp = "${{ steps.label.outputs.stamp }}"
+          note = ("午盘场次的当日 K 线为半根，趋势翻转/冻结/解冻类判断以收盘为准。"
+                  if label == "午盘" else "收盘场次数据完整，建议可执行。")
+          page = f"""<!DOCTYPE html>
+          <html lang=\"zh\"><head><meta charset=\"utf-8\">
+          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">
+          <title>515880 信号 · {label} {stamp}</title>
+          <style>
+            body{{font-family:system-ui,-apple-system,sans-serif;max-width:720px;margin:2rem auto;padding:0 1rem;background:#0b0e14;color:#d8dee9}}
+            pre{{white-space:pre-wrap;background:#11151f;padding:1rem;border-radius:8px;line-height:1.7;font-size:.95rem}}
+            h1{{font-size:1.15rem}} .note{{color:#e5c07b}} .disc{{color:#888;font-size:.85rem}}
+          </style>
+          </head><body>
+          <h1>SH515880 操作建议 · {label}（{stamp} 北京时间）</h1>
+          <p class=\"note\">{note}</p>
+          <pre>{html.escape(text)}</pre>
+          <p class=\"disc\">程序生成的纪律提示，需人工确认后执行，系统不自动下单。历史场次见 snapshots/ 目录。</p>
+          </body></html>"""
+          pathlib.Path('signal.html').write_text(page, encoding='utf-8')
+          EOF
+
+      - name: Checkout Pages source
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: pages-main
+
+      - name: Publish to docs/dev/515880/signal/
+        run: |
+          cd pages-main
+          git pull --ff-only origin main
+          cd ..
+          mkdir -p pages-main/docs/dev/515880/signal/snapshots
+          cp signal.html pages-main/docs/dev/515880/signal/index.html
+          cp signal.html "pages-main/docs/dev/515880/signal/snapshots/${{ steps.label.outputs.today }}_${{ steps.label.outputs.label }}.html"
+
+      - name: Commit and push
+        working-directory: pages-main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/dev/515880/signal/
+          if git diff --staged --quiet; then
+            echo "No signal changes."
+          else
+            git commit -m "chore: 515880 signal ${{ steps.label.outputs.label }} ${{ steps.label.outputs.stamp }}"
+            git push origin HEAD:main
+          fi
