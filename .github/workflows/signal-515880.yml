@@ -99,6 +99,21 @@ jobs:
           cp signal.html pages-main/docs/dev/515880/signal/index.html
           cp signal.html "pages-main/docs/dev/515880/signal/snapshots/${{ steps.label.outputs.today }}_${{ steps.label.outputs.label }}.html"
 
+      - name: Build snapshots index
+        run: |
+          cd pages-main/docs/dev/515880/signal/snapshots
+          {
+            echo '<!DOCTYPE html><html lang="zh"><head><meta charset="utf-8">'
+            echo '<meta name="viewport" content="width=device-width, initial-scale=1">'
+            echo '<title>515880 信号历史场次</title>'
+            echo '<style>body{font-family:system-ui,-apple-system,sans-serif;max-width:720px;margin:2rem auto;padding:0 1rem;background:#0b0e14;color:#d8dee9}h1{font-size:1.15rem}a{color:#61afef;text-decoration:none;display:block;padding:.4rem 0;border-bottom:1px solid #1c2230}a:hover{color:#98c379}</style>'
+            echo '</head><body><h1>SH515880 信号历史场次（新→旧）</h1>'
+            for f in $(ls -1 *.html | grep -v '^index\.html$' | sort -r); do
+              echo "<a href=\"$f\">${f%.html}</a>"
+            done
+            echo '</body></html>'
+          } > index.html
+
       - name: Commit and push
         working-directory: pages-main
         run: |
