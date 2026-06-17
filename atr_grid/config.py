@@ -80,6 +80,19 @@ class GridConfig:
     signal_cautious_buy_scale: float = 0.5    # 警戒时买单缩减比例
     signal_initial_capital: float = 100_000.0  # 信号引擎模拟初始资金
 
+    # ---- Overnight AI-chain weak filter ----
+    external_ai_enabled: bool = False
+    external_ai_symbols: tuple[str, ...] = ("NVDA", "AVGO", "AMD", "TSM", "QQQ", "SOXX")
+    external_ai_cautious_avg_threshold: float = -2.0
+    external_ai_severe_avg_threshold: float = -4.0
+    external_ai_strong_avg_threshold: float = 1.5
+
+    # ---- Intraday market factors from Tencent realtime quotes ----
+    market_factors_enabled: bool = False
+    market_factor_symbols: tuple[str, ...] = ("SH515880", "SZ159325", "SZ399001", "SZ399006")
+    ai_hardware_symbol: str = "SH515880"
+    domestic_semi_symbol: str = "SZ159325"
+
 
 # Singleton default config for convenience.
 DEFAULT_CONFIG = GridConfig()
@@ -111,6 +124,8 @@ _PROFILES: dict[str, dict[str, float | int | bool]] = {
     "trend_hybrid": {
         "reference_tranche_shares": 300,
         "trend_hybrid_enabled": True,
+        "external_ai_enabled": True,
+        "market_factors_enabled": True,
         "base_position_ratio": 0.40,
         "cash_floor_ratio": 0.20,
         "position_window": 60,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import math
 
-from core.market_data import get_current_price
+from core.market_data import get_current_price, parse_tencent_quote
 from atr_grid.data import _to_float, normalize_symbol
 
 
@@ -60,3 +60,29 @@ class TestGetCurrentPrice:
             raise ModuleNotFoundError("requests")
 
         assert get_current_price("SH515880", quote_fetcher=broken_fetcher) is None
+
+
+class TestTencentQuote:
+    def test_parse_full_quote_payload(self):
+        payload = (
+            "1~通信ETF国泰~515880~1.754~1.729~1.701~28620706~14652688~13936102~"
+            "1.754~13462~1.753~62555~1.752~29477~1.751~33752~1.750~42244~"
+            "1.755~134887~1.756~101934~1.757~49730~1.758~31432~1.759~21701~~"
+            "20260617145247~0.025~1.45~1.755~1.701~1.754/28620706/4958063562~"
+            "28620706~495806~10.60~~~1.755~1.701~3.12~473.45~473.45~0.00~"
+            "1.902~1.556~0.81~-158194~1.732~~~~~~495806.3562~0.0000~0~ ~ETF"
+        )
+
+        quote = parse_tencent_quote("sh515880", payload)
+
+        assert quote is not None
+        assert quote.symbol == "SH515880"
+        assert quote.name == "通信ETF国泰"
+        assert quote.current == 1.754
+        assert quote.last_close == 1.729
+        assert quote.open == 1.701
+        assert quote.high == 1.755
+        assert quote.low == 1.701
+        assert quote.percent == 1.45
+        assert quote.amount == 4_958_063_562
+        assert quote.instrument_type == "ETF"

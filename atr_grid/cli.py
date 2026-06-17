@@ -127,11 +127,19 @@ def _plan_summary(plan) -> str:
     risk_tip = _risk_tip(plan.regime, plan.grid_enabled)
     trim_text = f"{plan.trim_shares}股" if plan.trim_shares else "N/A"
     rebuy_text = f"¥{plan.rebuy_price:.3f}" if plan.rebuy_price is not None else "N/A"
+    external = getattr(plan, "external_context", None) or {}
+    external_label = external.get("label", "未接入")
+    external_avg = external.get("avg_return_pct")
+    external_text = f"{external_label}（平均 {external_avg:+.2f}%）" if isinstance(external_avg, (int, float)) else external_label
+    market = getattr(plan, "market_context", None) or {}
+    market_text = market.get("summary") or "未接入"
     return "\n".join(
         [
             f"[{plan.symbol}] ETF ATR 网格结论",
             f"当前价：¥{plan.current_price:.3f} | 数据：{plan.data_source} | 最后交易日：{plan.last_trade_date}",
             f"市场状态：{plan.regime} | 当前模式：{plan.mode} | 网格启用：{'是' if plan.grid_enabled else '否'}",
+            f"隔夜AI链：{external_text}",
+            f"盘中因子：{market_text}",
             f"策略名称：{plan.strategy_name}",
             f"现在该做什么：{plan.headline_action}",
             f"标准模板：按 {plan.reference_position_shares} 股、每档 {plan.reference_tranche_shares} 股",

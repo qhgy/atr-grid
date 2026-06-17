@@ -65,6 +65,8 @@ class GridPlan:
     cash_floor: float = 0.0
     only_sell: bool = False
     total_equity: float = 0.0
+    external_context: dict = field(default_factory=dict)
+    market_context: dict = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
 
@@ -123,7 +125,127 @@ def build_plan_from_context(context: MarketContext, cfg: GridConfig = DEFAULT_CO
     # Hybrid overlay (Phase 4)
     if cfg.trend_hybrid_enabled:
         plan = _apply_hybrid_overlay(plan, frame, cfg)
+    if cfg.external_ai_enabled:
+        plan = _apply_external_ai_overlay(plan, cfg)
+    if cfg.market_factors_enabled:
+        plan = _apply_market_factor_overlay(plan, cfg)
     return plan
+
+
+def _apply_external_ai_overlay(plan: GridPlan, cfg: GridConfig) -> GridPlan:
+    """Attach overnight AI-chain context as a weak advisory filter."""
+    from .external import fetch_external_ai_context
+
+    context = fetch_external_ai_context(cfg)
+    payload = context.to_dict()
+    plan.external_context = payload
+    if context.warning:
+        plan.warnings.append(context.warning)
+
+    if context.status in {"weak", "severe_weak"}:
+        plan.action_steps.append(f"外盘过滤：{context.label}，{context.note}")
+        if plan.rebuy_price is not None:
+            plan.trend_adjustment_note += " 隔夜 AI 链偏弱时，接回只做小仓确认，不做加速补仓。"
+    elif context.status == "strong":
+        plan.action_steps.append(f"外盘过滤：{context.label}，{context.note}")
+    return plan
+
+
+def _apply_market_factor_overlay(plan: GridPlan, cfg: GridConfig) -> GridPlan:
+    """Attach Tencent realtime market factors for intraday judgement."""
+    from core.market_data import get_tencent_quotes
+
+    symbols = (plan.symbol, *cfg.market_factor_symbols)
+    quotes = get_tencent_quotes(symbols)
+    payload = _build_market_factor_payload(plan.symbol, quotes, cfg)
+    plan.market_context = payload
+    if payload.get("warning"):
+        plan.warnings.append(str(payload["warning"]))
+
+    summary = payload.get("summary")
+    if summary:
+        plan.action_steps.append(f"盘中因子：{summary}")
+    return plan
+
+
+def _build_market_factor_payload(symbol: str, quotes: dict, cfg: GridConfig) -> dict:
+    main = quotes.get(symbol)
+    if not main:
+        return {"status": "missing", "warning": "market_factors_missing_main_quote"}
+
+    def quote_dict(sym: str) -> dict:
+        quote = quotes.get(sym)
+        if not quote:
+            return {"symbol": sym, "status": "missing"}
+        day_position = _day_position(quote.current, quote.low, quote.high)
+        return {
+            "symbol": quote.symbol,
+            "name": quote.name,
+            "current": quote.current,
+            "open": quote.open,
+            "high": quote.high,
+            "low": quote.low,
+            "last_close": quote.last_close,
+            "chg": quote.chg,
+            "percent": quote.percent,
+            "volume": quote.volume,
+            "amount": quote.amount,
+            "timestamp": quote.timestamp,
+            "instrument_type": quote.instrument_type,
+            "day_position_pct": round(day_position, 1) if day_position is not None else None,
+        }
+
+    main_payload = quote_dict(symbol)
+    companions = {sym: quote_dict(sym) for sym in cfg.market_factor_symbols}
+    domestic = companions.get(cfg.domestic_semi_symbol, {})
+    domestic_pct = domestic.get("percent")
+    main_pct = main_payload.get("percent")
+    relative = None
+    relative_label = f"{cfg.domestic_semi_symbol} 相对 {symbol}"
+    if isinstance(domestic_pct, (int, float)) and isinstance(main_pct, (int, float)):
+        if symbol == cfg.domestic_semi_symbol:
+            hardware = companions.get(cfg.ai_hardware_symbol, {})
+            hardware_pct = hardware.get("percent")
+            if isinstance(hardware_pct, (int, float)):
+                relative = round(domestic_pct - hardware_pct, 2)
+                relative_label = f"{cfg.domestic_semi_symbol} 相对 {cfg.ai_hardware_symbol}"
+            else:
+                relative = 0.0
+        else:
+            relative = round(domestic_pct - main_pct, 2)
+
+    index_notes: list[str] = []
+    for sym in ("SZ399001", "SZ399006"):
+        pct = companions.get(sym, {}).get("percent")
+        if isinstance(pct, (int, float)):
+            index_notes.append(f"{sym} {pct:+.2f}%")
+
+    summary_parts: list[str] = []
+    main_pos = main_payload.get("day_position_pct")
+    if isinstance(main_pos, (int, float)):
+        summary_parts.append(f"{symbol} 日内位置 {main_pos:.1f}%")
+    if relative is not None:
+        summary_parts.append(f"{relative_label} 强 {relative:+.2f}pct")
+    if index_notes:
+        summary_parts.append("指数 " + " / ".join(index_notes))
+
+    return {
+        "status": "ok",
+        "source": "tencent",
+        "main": main_payload,
+        "companions": companions,
+        "domestic_semi_symbol": cfg.domestic_semi_symbol,
+        "ai_hardware_symbol": cfg.ai_hardware_symbol,
+        "domestic_vs_main_pct": relative,
+        "domestic_relative_label": relative_label,
+        "summary": "；".join(summary_parts),
+    }
+
+
+def _day_position(current: float | None, low: float | None, high: float | None) -> float | None:
+    if current is None or low is None or high is None or high <= low:
+        return None
+    return (current - low) / (high - low) * 100.0
 
 
 def _apply_hybrid_overlay(plan: GridPlan, frame, cfg: GridConfig) -> GridPlan:

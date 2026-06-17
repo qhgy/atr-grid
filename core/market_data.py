@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import json
+import re
+import urllib.request
+from dataclasses import dataclass, asdict
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
@@ -13,6 +16,28 @@ from core.xueqiu_session import ensure_xueqiu_token_loaded
 QuoteFetcher = Callable[[str], dict[str, Any] | None]
 KlineFetcher = Callable[[str, str, int], dict[str, Any] | None]
 AkshareEtfFetcher = Callable[[str, str, str], Any]
+
+
+@dataclass(slots=True)
+class TencentQuote:
+    """Normalized quote returned by Tencent's public qt.gtimg.cn endpoint."""
+
+    symbol: str
+    name: str
+    current: float | None
+    last_close: float | None
+    open: float | None
+    high: float | None
+    low: float | None
+    chg: float | None
+    percent: float | None
+    volume: float | None
+    amount: float | None
+    timestamp: str | None
+    instrument_type: str | None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 def _default_quote_fetcher(symbol: str) -> dict[str, Any] | None:
@@ -64,6 +89,67 @@ def get_current_price(
         return float(current)
     except (TypeError, ValueError):
         return None
+
+
+def get_tencent_quotes(symbols: list[str] | tuple[str, ...]) -> dict[str, TencentQuote]:
+    """Fetch realtime quotes from Tencent without cookies.
+
+    The endpoint is useful as a lightweight intraday source. It is treated as
+    advisory/fallback data because field positions are undocumented.
+    """
+    normalized = [_tencent_symbol(symbol) for symbol in symbols if symbol]
+    if not normalized:
+        return {}
+
+    url = "https://qt.gtimg.cn/q=" + ",".join(normalized)
+    try:
+        with urllib.request.urlopen(
+            urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}),
+            timeout=8,
+        ) as resp:
+            text = resp.read().decode("gbk", errors="ignore")
+    except Exception:
+        return {}
+
+    quotes: dict[str, TencentQuote] = {}
+    for raw_symbol, payload in re.findall(r'v_([a-z]{2}\d{6})="([^"]*)"', text):
+        quote = parse_tencent_quote(raw_symbol, payload)
+        if quote:
+            quotes[quote.symbol] = quote
+    return quotes
+
+
+def get_tencent_quote(symbol: str) -> TencentQuote | None:
+    """Fetch a single Tencent realtime quote."""
+    return get_tencent_quotes([symbol]).get(_normalize_prefixed_symbol(symbol))
+
+
+def parse_tencent_quote(raw_symbol: str, payload: str) -> TencentQuote | None:
+    """Parse one Tencent full quote payload into a TencentQuote."""
+    parts = payload.split("~")
+    if len(parts) < 35:
+        return None
+    symbol = _normalize_prefixed_symbol(raw_symbol)
+    amount = _safe_number(parts[35].split("/")[-1] if len(parts) > 35 and "/" in parts[35] else None)
+    if amount is None:
+        # Tencent also exposes amount in ten-thousand yuan at index 37.
+        amount_10k = _safe_number(_field(parts, 37))
+        amount = amount_10k * 10_000 if amount_10k is not None else None
+    return TencentQuote(
+        symbol=symbol,
+        name=_field(parts, 1) or "",
+        current=_safe_number(_field(parts, 3)),
+        last_close=_safe_number(_field(parts, 4)),
+        open=_safe_number(_field(parts, 5)),
+        high=_safe_number(_field(parts, 33)),
+        low=_safe_number(_field(parts, 34)),
+        chg=_safe_number(_field(parts, 31)),
+        percent=_safe_number(_field(parts, 32)),
+        volume=_safe_number(_field(parts, 36)),
+        amount=amount,
+        timestamp=_field(parts, 30),
+        instrument_type=(_field(parts, 61) or "").strip() or None,
+    )
 
 
 def _local_kline_path(symbol: str, count: int = 100, base_dir: str | Path | None = None) -> Path:
@@ -223,6 +309,38 @@ def _strip_exchange_prefix(symbol: str) -> str:
     if normalized.startswith(("SH", "SZ")):
         return normalized[2:]
     return normalized
+
+
+def _normalize_prefixed_symbol(symbol: str) -> str:
+    normalized = str(symbol).strip().upper()
+    if normalized.startswith(("SH", "SZ")) and len(normalized) >= 8:
+        return normalized[:8]
+    if normalized.startswith(("SH", "SZ")):
+        return normalized
+    lowered = str(symbol).strip().lower()
+    if lowered.startswith(("sh", "sz")) and len(lowered) >= 8:
+        return lowered[:2].upper() + lowered[2:8]
+    raw = _strip_exchange_prefix(normalized)
+    if len(raw) == 6 and raw.isdigit():
+        prefix = "SH" if raw.startswith(("5", "6", "9")) else "SZ"
+        return f"{prefix}{raw}"
+    return normalized
+
+
+def _tencent_symbol(symbol: str) -> str:
+    normalized = _normalize_prefixed_symbol(symbol)
+    if normalized.startswith("SH"):
+        return "sh" + normalized[2:]
+    if normalized.startswith("SZ"):
+        return "sz" + normalized[2:]
+    return str(symbol).strip().lower()
+
+
+def _field(parts: list[str], index: int) -> str | None:
+    if index >= len(parts):
+        return None
+    value = parts[index]
+    return value if value != "" else None
 
 
 def _safe_number(value: Any) -> float | None:

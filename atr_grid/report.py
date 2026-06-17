@@ -81,6 +81,8 @@ def render_markdown(plan: GridPlan) -> str:
     """Render a human-readable Markdown report."""
     snapshot = plan.snapshot
     warnings = "\n".join(f"- {item}" for item in plan.warnings) if plan.warnings else "- 无"
+    external = _render_external_context_markdown(plan.external_context)
+    market = _render_market_context_markdown(plan.market_context)
 
     lines = [
         f"# {plan.symbol} ETF ATR 网格计划",
@@ -96,6 +98,8 @@ def render_markdown(plan: GridPlan) -> str:
         f"- 波动提示：{plan.volatility_note}",
         f"- 间距说明：{plan.spacing_note}",
         f"- 结论：{plan.reason}",
+        f"- 隔夜 AI 链：{external['summary']}",
+        f"- 盘中因子：{market['summary']}",
         "",
         "## 操作卡片",
         "",
@@ -140,6 +144,14 @@ def render_markdown(plan: GridPlan) -> str:
         f"- MA20 / MA60：¥{_fmt(snapshot.ma20, 3)} / ¥{_fmt(snapshot.ma60, 3)}",
         f"- 说明：{plan.reason}",
         "",
+        "## 隔夜 AI 链参考",
+        "",
+        external["detail"],
+        "",
+        "## 盘中实时因子",
+        "",
+        market["detail"],
+        "",
         "## 网格参数与买卖点",
         "",
         f"- 中枢：{_fmt_price(plan.center)}",
@@ -162,6 +174,76 @@ def render_markdown(plan: GridPlan) -> str:
         "",
     ]
     return "\n".join(lines)
+
+
+def _render_external_context_markdown(context: dict | None) -> dict[str, str]:
+    if not context:
+        return {"summary": "未接入", "detail": "- 未接入外盘参考。"}
+    label = context.get("label") or "未取得"
+    note = context.get("note") or ""
+    avg = context.get("avg_return_pct")
+    symbols = context.get("symbols") or {}
+    avg_text = f"，平均 {avg:+.2f}%" if isinstance(avg, (int, float)) else ""
+    if symbols:
+        symbol_text = " / ".join(f"{symbol} {value:+.2f}%" for symbol, value in symbols.items())
+        detail = f"- 状态：{label}{avg_text}\n- 说明：{note}\n- 成分：{symbol_text}"
+    else:
+        detail = f"- 状态：{label}{avg_text}\n- 说明：{note}"
+    return {"summary": f"{label}{avg_text}", "detail": detail}
+
+
+def _render_market_context_markdown(context: dict | None) -> dict[str, str]:
+    if not context:
+        return {"summary": "未接入", "detail": "- 未接入腾讯实时因子。"}
+    if context.get("status") != "ok":
+        warning = context.get("warning") or "未知原因"
+        return {"summary": "未取得", "detail": f"- 腾讯实时因子未取得：{warning}"}
+
+    summary = context.get("summary") or "已接入"
+    main = context.get("main") or {}
+    companions = context.get("companions") or {}
+    lines = [
+        f"- 来源：{context.get('source', 'tencent')}",
+        _format_realtime_factor_line("主标的", main),
+    ]
+    domestic_symbol = context.get("domestic_semi_symbol")
+    hardware_symbol = context.get("ai_hardware_symbol")
+    if hardware_symbol and hardware_symbol in companions and hardware_symbol != main.get("symbol"):
+        lines.append(_format_realtime_factor_line("AI 硬件参考", companions[hardware_symbol]))
+    if domestic_symbol and domestic_symbol in companions:
+        lines.append(_format_realtime_factor_line("国产半导体参考", companions[domestic_symbol]))
+    for symbol in ("SZ399001", "SZ399006"):
+        if symbol in companions:
+            lines.append(_format_realtime_factor_line("指数参考", companions[symbol]))
+    relative = context.get("domestic_vs_main_pct")
+    relative_label = context.get("domestic_relative_label") or f"{domestic_symbol} 相对主标的"
+    if isinstance(relative, (int, float)):
+        lines.append(f"- 相对强弱：{relative_label} {relative:+.2f} 个百分点。")
+    return {"summary": summary, "detail": "\n".join(lines)}
+
+
+def _format_realtime_factor_line(label: str, item: dict) -> str:
+    symbol = item.get("symbol") or "N/A"
+    if item.get("status") == "missing":
+        return f"- {label}：{symbol} 未取得。"
+    name = item.get("name") or ""
+    current = item.get("current")
+    pct = item.get("percent")
+    low = item.get("low")
+    high = item.get("high")
+    amount = item.get("amount")
+    day_pos = item.get("day_position_pct")
+    current_text = f"{current:.3f}" if isinstance(current, (int, float)) else "N/A"
+    pct_text = f"{pct:+.2f}%" if isinstance(pct, (int, float)) else "N/A"
+    range_text = (
+        f"{low:.3f}-{high:.3f}" if isinstance(low, (int, float)) and isinstance(high, (int, float)) else "N/A"
+    )
+    amount_text = f"{amount / 100_000_000:.2f}亿" if isinstance(amount, (int, float)) else "N/A"
+    day_pos_text = f"{day_pos:.1f}%" if isinstance(day_pos, (int, float)) else "N/A"
+    return (
+        f"- {label}：{symbol} {name}，现价 {current_text}，涨跌 {pct_text}，"
+        f"日内区间 {range_text}，日内位置 {day_pos_text}，成交额 {amount_text}。"
+    )
 
 
 def default_report_paths(plan: GridPlan) -> tuple[Path, Path]:
