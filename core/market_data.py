@@ -16,6 +16,7 @@ from core.xueqiu_session import ensure_xueqiu_token_loaded
 QuoteFetcher = Callable[[str], dict[str, Any] | None]
 KlineFetcher = Callable[[str, str, int], dict[str, Any] | None]
 AkshareEtfFetcher = Callable[[str, str, str], Any]
+TencentKlineFetcher = Callable[[str, int], dict[str, Any] | None]
 
 
 @dataclass(slots=True)
@@ -124,6 +125,31 @@ def get_tencent_quote(symbol: str) -> TencentQuote | None:
     return get_tencent_quotes([symbol]).get(_normalize_prefixed_symbol(symbol))
 
 
+def _default_tencent_kline_fetcher(symbol: str, count: int) -> dict[str, Any] | None:
+    tencent_symbol = _tencent_symbol(symbol)
+    url = f"https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={tencent_symbol},day,,,{count},qfq"
+    with urllib.request.urlopen(
+        urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://gu.qq.com/"}),
+        timeout=8,
+    ) as resp:
+        return json.loads(resp.read().decode("utf-8", errors="ignore"))
+
+
+def get_tencent_kline_rows(
+    symbol: str,
+    *,
+    count: int = 100,
+    kline_fetcher: TencentKlineFetcher | None = None,
+) -> list[dict[str, Any]] | None:
+    """Fetch Tencent daily kline rows without cookies."""
+    fetcher = kline_fetcher or _default_tencent_kline_fetcher
+    try:
+        result = fetcher(symbol, count)
+    except Exception:
+        return None
+    return normalize_tencent_kline_rows(result, symbol, count=count)
+
+
 def parse_tencent_quote(raw_symbol: str, payload: str) -> TencentQuote | None:
     """Parse one Tencent full quote payload into a TencentQuote."""
     parts = payload.split("~")
@@ -150,6 +176,54 @@ def parse_tencent_quote(raw_symbol: str, payload: str) -> TencentQuote | None:
         timestamp=_field(parts, 30),
         instrument_type=(_field(parts, 61) or "").strip() or None,
     )
+
+
+def normalize_tencent_kline_rows(
+    result: dict[str, Any] | None,
+    symbol: str,
+    *,
+    count: int = 100,
+) -> list[dict[str, Any]] | None:
+    """Convert Tencent fqkline daily rows into named dict rows."""
+    if not result or result.get("code") != 0:
+        return None
+    data = result.get("data")
+    if not isinstance(data, dict):
+        return None
+    block = data.get(_tencent_symbol(symbol))
+    if not isinstance(block, dict):
+        return None
+    raw_rows = block.get("qfqday") or block.get("day")
+    if not isinstance(raw_rows, list):
+        return None
+
+    normalized: list[dict[str, Any]] = []
+    for row in raw_rows:
+        if not isinstance(row, list) or len(row) < 6:
+            continue
+        try:
+            timestamp = int(datetime.strptime(str(row[0]), "%Y-%m-%d").timestamp() * 1000)
+        except ValueError:
+            continue
+        normalized.append(
+            {
+                "timestamp": timestamp,
+                "volume": _safe_number(row[5]),
+                "open": _safe_number(row[1]),
+                "high": _safe_number(row[3]),
+                "low": _safe_number(row[4]),
+                "close": _safe_number(row[2]),
+                "chg": None,
+                "percent": None,
+                "turnoverrate": None,
+                "amount": None,
+                "volume_post": None,
+                "amount_post": None,
+            }
+        )
+    if not normalized:
+        return None
+    return normalized[-count:] if len(normalized) > count else normalized
 
 
 def _local_kline_path(symbol: str, count: int = 100, base_dir: str | Path | None = None) -> Path:
@@ -260,6 +334,7 @@ def get_kline_data(
     period: str = "day",
     kline_fetcher: KlineFetcher | None = None,
     akshare_fetcher: AkshareEtfFetcher | None = None,
+    tencent_kline_fetcher: TencentKlineFetcher | None = None,
     base_dir: str | Path | None = None,
 ) -> tuple[list[dict[str, Any]] | None, str]:
     """Fetch kline data, falling back to local cached JSON when needed."""
@@ -271,6 +346,11 @@ def get_kline_data(
             return rows, "api"
     except Exception:
         pass
+
+    if period == "day":
+        tencent_rows = get_tencent_kline_rows(symbol, count=count, kline_fetcher=tencent_kline_fetcher)
+        if tencent_rows:
+            return tencent_rows, "tencent"
 
     if period == "day" and _looks_like_etf(symbol):
         ak_fetcher = akshare_fetcher or _default_akshare_etf_fetcher

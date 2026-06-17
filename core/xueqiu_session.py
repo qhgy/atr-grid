@@ -61,6 +61,8 @@ def parse_cookie_text(raw_text: str) -> str:
         if parsed:
             return parsed
     if "# Netscape HTTP Cookie File" not in text:
+        if _looks_like_bare_xq_token(text):
+            return f"xq_a_token={text}"
         return text
 
     pairs: list[str] = []
@@ -76,6 +78,11 @@ def parse_cookie_text(raw_text: str) -> str:
             continue
         pairs.append(f"{name}={value}")
     return "; ".join(pairs).strip()
+
+
+def _looks_like_bare_xq_token(text: str) -> bool:
+    """Return True for a single raw xq_a_token value copied from Xueqiu clients."""
+    return bool(text) and "=" not in text and ";" not in text and not any(char.isspace() for char in text)
 
 
 def _parse_cookie_editor_json(raw_text: str) -> str:

@@ -10,6 +10,10 @@ class TestParseCookieText:
         raw = "xq_a_token=abc; u=123"
         assert parse_cookie_text(raw) == raw
 
+    def test_bare_xq_token_is_wrapped_as_cookie_header(self):
+        raw = "abc123guesttoken"
+        assert parse_cookie_text(raw) == "xq_a_token=abc123guesttoken"
+
     def test_cookie_editor_json_export(self):
         raw = """
 [
