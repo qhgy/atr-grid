@@ -2,14 +2,16 @@
 
 ETF ATR 网格策略引擎 · 自动化 Dashboard + 微信推送
 
-📊 **Dashboard**：https://qhgy.github.io/atr-grid/
+📊 **稳定版 Dashboard**：https://qhgy.github.io/atr-grid/
+
+🧪 **开发版 Dashboard**：https://qhgy.github.io/atr-grid/dev/
 
 ## 快速开始
 
 克隆后，在项目根目录执行：
 
 ```bash
-# 设置雪球 Cookie（本地运行必须）
+# 可选：设置雪球 Cookie / xq_a_token。有凭证时优先走雪球；未设置时会自动回退到腾讯免 Cookie 日 K。
 export XUEQIU_COOKIE_FILE=/path/to/xueqiu.com_cookies.txt
 # Windows PowerShell:
 # $env:XUEQIU_COOKIE_FILE = "D:\your_path\xueqiu.com_cookies.txt"
@@ -25,6 +27,7 @@ uv run python -m atr_grid replay SH515880 --lookback 30
 ```
 
 > 注：需先安装 [uv](https://docs.astral.sh/uv/) 并执行 `uv sync`
+> `XUEQIU_COOKIE_FILE` 可以是完整 Cookie 导出，也可以是单行裸 `xq_a_token`。
 
 ## 当前监控标的
 
@@ -42,7 +45,7 @@ uv run python -m atr_grid replay SH515880 --lookback 30
 | `atr_grid/engine.py` | 核心计划生成 + 回放 |
 | `atr_grid/regime.py` | 市场状态分类 |
 | `atr_grid/report.py` | JSON/Markdown/HTML 报告 |
-| `core/` | 数据获取与雪球 session |
+| `core/` | 数据获取、腾讯免 Cookie fallback 与雪球 session |
 
 ## GitHub Actions
 
