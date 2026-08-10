@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 from typing import Any
 
-from core.market_data import get_current_price, get_kline_data
+from core.market_data import get_current_price, get_kline_data, get_tencent_quote
 
 from .config import DEFAULT_CONFIG, GridConfig
 
@@ -66,8 +66,13 @@ def load_market_context(
     warnings: list[str] = []
     current_price = get_current_price(normalized_symbol)
     if current_price is None:
-        current_price = last_close
-        warnings.append("current_price_fallback_to_last_close")
+        tencent_quote = get_tencent_quote(normalized_symbol)
+        if tencent_quote and tencent_quote.current is not None:
+            current_price = tencent_quote.current
+            warnings.append("current_price_fallback_to_tencent")
+        else:
+            current_price = last_close
+            warnings.append("current_price_fallback_to_last_close")
     if source == "local":
         warnings.append("using_local_kline_cache")
 
