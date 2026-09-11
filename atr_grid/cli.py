@@ -4,12 +4,22 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
+_BJT = timezone(timedelta(hours=8))
+
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        try:
+            _stream.reconfigure(encoding="utf-8")
+        except Exception:
+            pass
+
 from .engine import generate_plan, replay_symbol
+from .config import for_profile, available_profiles
 from .report import (
-    beijing_now_str,
-    beijing_today_str,
     build_notify_content,
     default_report_paths,
     fmt_levels,
@@ -29,6 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
     plan_parser = subparsers.add_parser("plan", help="生成单个 ETF 的 ATR 网格计划")
     plan_parser.add_argument("symbol", help="ETF 代码，如 SH515880 或 515880")
     plan_parser.add_argument("--shares", type=int, default=2000, help="参考持仓股数")
+    plan_parser.add_argument("--profile", default="stable", choices=available_profiles(), help="策略 profile")
     plan_parser.add_argument("--json-out", help="JSON 输出文件路径")
     plan_parser.add_argument("--md-out", help="Markdown 输出文件路径")
     plan_parser.add_argument("--no-save", action="store_true", help="只打印结果，不自动保存默认报告")
@@ -43,8 +54,12 @@ def build_parser() -> argparse.ArgumentParser:
     multi_parser = subparsers.add_parser("multi", help="生成多个 ETF 的汇总 Dashboard")
     multi_parser.add_argument("symbols", nargs="+", help="ETF 代码列表，空格分隔")
     multi_parser.add_argument("--shares", type=int, default=2000, help="参考持仓股数")
+    multi_parser.add_argument("--profile", default="stable", choices=available_profiles(), help="策略 profile")
     multi_parser.add_argument("--notify", action="store_true", help="有临近档位的标的推送通知")
     multi_parser.add_argument("--notify-always", action="store_true", help="推送所有标的的通知")
+
+    signal_parser = subparsers.add_parser("signal", help="生成 515880 每日网格信号")
+    signal_parser.add_argument("--no-nvda", action="store_true", help="关闭 NVDA 信号")
 
     return parser
 
@@ -55,7 +70,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "plan":
-        plan = generate_plan(args.symbol, shares=args.shares)
+        cfg = for_profile(args.profile)
+        plan = generate_plan(args.symbol, shares=args.shares, cfg=cfg)
         print(_plan_summary(plan))
         json_target, md_target = _resolve_output_paths(plan, args.json_out, args.md_out, args.no_save)
         if json_target is not None:
@@ -70,10 +86,11 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "multi":
+        cfg = for_profile(args.profile)
         plans = []
         for sym in args.symbols:
             try:
-                p = generate_plan(sym, shares=args.shares)
+                p = generate_plan(sym, shares=args.shares, cfg=cfg)
                 plans.append(p)
                 print(_plan_summary(p))
             except Exception as exc:
@@ -83,6 +100,18 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Multi-ETF HTML 已写出: {html_target}")
             for p in plans:
                 _maybe_notify(p, notify=args.notify, notify_always=args.notify_always)
+        return 0
+
+    if args.command == "signal":
+        from .signal_engine import generate_signal
+        from .signal_report import write_signal_html
+        sig = generate_signal(disable_nvda=args.no_nvda)
+        html_path = write_signal_html(sig)
+        print(f"[SH515880] 每日信号已生成: {html_path}")
+        rsi_str = f"{sig.rsi14:.1f}" if sig.rsi14 is not None else "N/A"
+        print(f"  日期: {sig.date} | 收盘: ¥{sig.close:.3f} | RSI14: {rsi_str}")
+        print(f"  风控: {sig.risk_action} | RSI状态: {sig.rsi_state}")
+        print(f"  买入档: {len(sig.buy_orders)} | 卖出档: {len(sig.sell_orders)}")
         return 0
 
     replay = replay_symbol(args.symbol, lookback=args.lookback, shares=args.shares)
@@ -98,11 +127,19 @@ def _plan_summary(plan) -> str:
     risk_tip = _risk_tip(plan.regime, plan.grid_enabled)
     trim_text = f"{plan.trim_shares}股" if plan.trim_shares else "N/A"
     rebuy_text = f"¥{plan.rebuy_price:.3f}" if plan.rebuy_price is not None else "N/A"
+    external = getattr(plan, "external_context", None) or {}
+    external_label = external.get("label", "未接入")
+    external_avg = external.get("avg_return_pct")
+    external_text = f"{external_label}（平均 {external_avg:+.2f}%）" if isinstance(external_avg, (int, float)) else external_label
+    market = getattr(plan, "market_context", None) or {}
+    market_text = market.get("summary") or "未接入"
     return "\n".join(
         [
             f"[{plan.symbol}] ETF ATR 网格结论",
             f"当前价：¥{plan.current_price:.3f} | 数据：{plan.data_source} | 最后交易日：{plan.last_trade_date}",
             f"市场状态：{plan.regime} | 当前模式：{plan.mode} | 网格启用：{'是' if plan.grid_enabled else '否'}",
+            f"隔夜AI链：{external_text}",
+            f"盘中因子：{market_text}",
             f"策略名称：{plan.strategy_name}",
             f"现在该做什么：{plan.headline_action}",
             f"标准模板：按 {plan.reference_position_shares} 股、每档 {plan.reference_tranche_shares} 股",
@@ -110,6 +147,8 @@ def _plan_summary(plan) -> str:
             f"机械接回网格：{fmt_levels(plan.reference_rebuy_ladder)}",
             f"趋势修正：最多卖 {plan.trend_sell_limit_shares} 股（{plan.trend_sell_limit_tranches} 档）",
             f"趋势说明：{plan.trend_adjustment_note}",
+            f"波动提示：{plan.volatility_note}",
+            f"间距说明：{plan.spacing_note}",
             f"主买点：{buy_text} | 主卖点：{sell_text}",
             f"建议减仓：{trim_text} | 建议接回：{rebuy_text}",
             f"失效下沿：{lower_text} | 突破上沿：{upper_text}",
@@ -171,8 +210,8 @@ def _write_multi_html(plans: list) -> Path:
     from .report import render_html, _load_paper_state  # local import to avoid circular
     from core.paths import project_path
 
-    now_str = beijing_now_str()
-    today = beijing_today_str()
+    now_str = datetime.now(_BJT).strftime("%Y-%m-%d %H:%M")
+    today = datetime.now(_BJT).strftime("%Y-%m-%d")
     sections = []
     summary_rows = []
 
