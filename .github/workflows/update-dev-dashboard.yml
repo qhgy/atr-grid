@@ -1,0 +1,77 @@
+name: Update ATR Grid Dev Dashboard
+
+on:
+  push:
+    branches:
+      - dev
+  workflow_dispatch:
+    inputs:
+      symbols:
+        description: 'ETF symbols space-separated (e.g. SH515880 SH513500)'
+        required: false
+        default: 'SH515880 SH513500 SZ159915'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: atr-grid-dev-dashboard
+  cancel-in-progress: true
+
+jobs:
+  update-dev-dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout dev source
+        uses: actions/checkout@v4
+        with:
+          path: dev-src
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        working-directory: dev-src
+        run: uv sync
+
+      - name: Generate dev dashboard
+        working-directory: dev-src
+        env:
+          XUEQIUTOKEN: ${{ secrets.XUEQIUTOKEN }}
+        run: |
+          SYMBOLS="${{ github.event.inputs.symbols || 'SH515880 SH513500 SZ159915' }}"
+          mkdir -p output
+          uv run python -m atr_grid multi $SYMBOLS
+
+      - name: Checkout Pages source
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          path: pages-main
+
+      - name: Update docs/dev
+        run: |
+          cd pages-main
+          git pull --ff-only origin main
+          cd ..
+
+          TODAY=$(TZ=Asia/Shanghai date '+%Y-%m-%d')
+          mkdir -p pages-main/docs/dev/snapshots
+          cp dev-src/output/atr_grid.html pages-main/docs/dev/index.html
+          if [ -d dev-src/output/snapshots ]; then
+            cp dev-src/output/snapshots/*.html pages-main/docs/dev/snapshots/ 2>/dev/null || true
+          fi
+          cp dev-src/output/atr_grid.html "pages-main/docs/dev/snapshots/${TODAY}.html"
+
+      - name: Commit and push dev dashboard
+        working-directory: pages-main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/dev/
+          if git diff --staged --quiet; then
+            echo "No dev dashboard changes."
+          else
+            git commit -m "chore: update dev dashboard $(TZ=Asia/Shanghai date '+%Y-%m-%d')"
+            git push origin HEAD:main
+          fi
