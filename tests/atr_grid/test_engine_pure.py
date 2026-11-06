@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import pandas as pd
 import pytest
 
 from atr_grid.config import GridConfig
 from atr_grid.engine import (
     _build_reference_ladder,
+    _build_grid_diagnostics,
     _effective_step,
     _generate_buy_levels,
     _generate_sell_levels,
@@ -57,6 +59,30 @@ class TestEffectiveStep:
         cfg = GridConfig(step_min_fraction=0.1, step_max_fraction=0.5)
         # band 10, min=1, max=5, atr=3 → 3
         assert _effective_step(atr14=3.0, lower=10.0, upper=20.0, precision=3, cfg=cfg) == 3.0
+
+
+class TestGridDiagnostics:
+    def test_flags_fast_atr_rise_and_explains_step_change(self):
+        frame = pd.DataFrame(
+            {
+                "close": [14.0] * 6,
+                "atr14": [0.8, 0.9, 1.0, 1.0, 1.0, 1.2],
+                "bb_lower": [10.0] * 6,
+                "bb_middle": [14.0] * 6,
+                "bb_upper": [18.0] * 6,
+                "ma20": [14.0] * 6,
+                "ma60": [13.5] * 6,
+            }
+        )
+
+        diagnostics = _build_grid_diagnostics(frame, precision=3)
+
+        assert diagnostics.atr_change_3d_pct == 20.0
+        assert diagnostics.atr_change_5d_pct == 50.0
+        assert diagnostics.previous_step == 1.0
+        assert diagnostics.step_change_pct == 20.0
+        assert "波动明显抬升" in diagnostics.volatility_note
+        assert "网格间距从 ¥1.000 调到 ¥1.200" in diagnostics.spacing_note
 
 
 class TestGenerateBuyLevels:
