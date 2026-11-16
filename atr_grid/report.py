@@ -7,9 +7,11 @@ import json
 import sys
 import urllib.parse
 import urllib.request
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Sequence
+
+_BJT = timezone(timedelta(hours=8))
 
 from core.paths import project_path
 
@@ -40,23 +42,6 @@ CSV_HEADER_MAP = {
     "upper_breakout": "上沿突破",
     "note": "说明",
 }
-
-_BEIJING_TZ = timezone(timedelta(hours=8))
-
-
-def beijing_now() -> datetime:
-    """Return the current time in Beijing (UTC+8)."""
-    return datetime.now(_BEIJING_TZ)
-
-
-def beijing_now_str() -> str:
-    """Return the current Beijing time formatted for dashboard display."""
-    return beijing_now().strftime("%Y-%m-%d %H:%M")
-
-
-def beijing_today_str() -> str:
-    """Return today's date in Beijing time."""
-    return beijing_now().strftime("%Y-%m-%d")
 
 
 def write_json_report(plan: GridPlan, target: str | Path) -> Path:
@@ -96,6 +81,8 @@ def render_markdown(plan: GridPlan) -> str:
     """Render a human-readable Markdown report."""
     snapshot = plan.snapshot
     warnings = "\n".join(f"- {item}" for item in plan.warnings) if plan.warnings else "- 无"
+    external = _render_external_context_markdown(plan.external_context)
+    market = _render_market_context_markdown(plan.market_context)
 
     lines = [
         f"# {plan.symbol} ETF ATR 网格计划",
@@ -108,7 +95,11 @@ def render_markdown(plan: GridPlan) -> str:
         f"- 当前模式：`{_translate_mode(plan.mode)}`",
         f"- 策略名称：`{plan.strategy_name}`",
         f"- 现在该做什么：{plan.headline_action}",
+        f"- 波动提示：{plan.volatility_note}",
+        f"- 间距说明：{plan.spacing_note}",
         f"- 结论：{plan.reason}",
+        f"- 隔夜 AI 链：{external['summary']}",
+        f"- 盘中因子：{market['summary']}",
         "",
         "## 操作卡片",
         "",
@@ -147,14 +138,27 @@ def render_markdown(plan: GridPlan) -> str:
         "## 市场状态判断",
         "",
         f"- ATR14：¥{_fmt(snapshot.atr14, 3)}",
+        f"- ATR14 变化：近3日 {_fmt_pct(plan.atr_change_3d_pct)} / 近5日 {_fmt_pct(plan.atr_change_5d_pct)}",
+        f"- 波动提示：{plan.volatility_note}",
         f"- Boll 上轨 / 中轨 / 下轨：¥{_fmt(snapshot.bb_upper, 3)} / ¥{_fmt(snapshot.bb_middle, 3)} / ¥{_fmt(snapshot.bb_lower, 3)}",
         f"- MA20 / MA60：¥{_fmt(snapshot.ma20, 3)} / ¥{_fmt(snapshot.ma60, 3)}",
         f"- 说明：{plan.reason}",
+        "",
+        "## 隔夜 AI 链参考",
+        "",
+        external["detail"],
+        "",
+        "## 盘中实时因子",
+        "",
+        market["detail"],
         "",
         "## 网格参数与买卖点",
         "",
         f"- 中枢：{_fmt_price(plan.center)}",
         f"- 步长：{_fmt_price(plan.step)}",
+        f"- 上一交易日步长：{_fmt_price(plan.previous_step)}",
+        f"- 步长变化：{_fmt_pct(plan.step_change_pct)}",
+        f"- 间距说明：{plan.spacing_note}",
         f"- 主买点：{_fmt_price(plan.primary_buy)}",
         f"- 主卖点：{_fmt_price(plan.primary_sell)}",
         f"- 建议减仓股数：{plan.trim_shares if plan.trim_shares else '无'}",
@@ -172,9 +176,79 @@ def render_markdown(plan: GridPlan) -> str:
     return "\n".join(lines)
 
 
+def _render_external_context_markdown(context: dict | None) -> dict[str, str]:
+    if not context:
+        return {"summary": "未接入", "detail": "- 未接入外盘参考。"}
+    label = context.get("label") or "未取得"
+    note = context.get("note") or ""
+    avg = context.get("avg_return_pct")
+    symbols = context.get("symbols") or {}
+    avg_text = f"，平均 {avg:+.2f}%" if isinstance(avg, (int, float)) else ""
+    if symbols:
+        symbol_text = " / ".join(f"{symbol} {value:+.2f}%" for symbol, value in symbols.items())
+        detail = f"- 状态：{label}{avg_text}\n- 说明：{note}\n- 成分：{symbol_text}"
+    else:
+        detail = f"- 状态：{label}{avg_text}\n- 说明：{note}"
+    return {"summary": f"{label}{avg_text}", "detail": detail}
+
+
+def _render_market_context_markdown(context: dict | None) -> dict[str, str]:
+    if not context:
+        return {"summary": "未接入", "detail": "- 未接入腾讯实时因子。"}
+    if context.get("status") != "ok":
+        warning = context.get("warning") or "未知原因"
+        return {"summary": "未取得", "detail": f"- 腾讯实时因子未取得：{warning}"}
+
+    summary = context.get("summary") or "已接入"
+    main = context.get("main") or {}
+    companions = context.get("companions") or {}
+    lines = [
+        f"- 来源：{context.get('source', 'tencent')}",
+        _format_realtime_factor_line("主标的", main),
+    ]
+    domestic_symbol = context.get("domestic_semi_symbol")
+    hardware_symbol = context.get("ai_hardware_symbol")
+    if hardware_symbol and hardware_symbol in companions and hardware_symbol != main.get("symbol"):
+        lines.append(_format_realtime_factor_line("AI 硬件参考", companions[hardware_symbol]))
+    if domestic_symbol and domestic_symbol in companions:
+        lines.append(_format_realtime_factor_line("国产半导体参考", companions[domestic_symbol]))
+    for symbol in ("SZ399001", "SZ399006"):
+        if symbol in companions:
+            lines.append(_format_realtime_factor_line("指数参考", companions[symbol]))
+    relative = context.get("domestic_vs_main_pct")
+    relative_label = context.get("domestic_relative_label") or f"{domestic_symbol} 相对主标的"
+    if isinstance(relative, (int, float)):
+        lines.append(f"- 相对强弱：{relative_label} {relative:+.2f} 个百分点。")
+    return {"summary": summary, "detail": "\n".join(lines)}
+
+
+def _format_realtime_factor_line(label: str, item: dict) -> str:
+    symbol = item.get("symbol") or "N/A"
+    if item.get("status") == "missing":
+        return f"- {label}：{symbol} 未取得。"
+    name = item.get("name") or ""
+    current = item.get("current")
+    pct = item.get("percent")
+    low = item.get("low")
+    high = item.get("high")
+    amount = item.get("amount")
+    day_pos = item.get("day_position_pct")
+    current_text = f"{current:.3f}" if isinstance(current, (int, float)) else "N/A"
+    pct_text = f"{pct:+.2f}%" if isinstance(pct, (int, float)) else "N/A"
+    range_text = (
+        f"{low:.3f}-{high:.3f}" if isinstance(low, (int, float)) and isinstance(high, (int, float)) else "N/A"
+    )
+    amount_text = f"{amount / 100_000_000:.2f}亿" if isinstance(amount, (int, float)) else "N/A"
+    day_pos_text = f"{day_pos:.1f}%" if isinstance(day_pos, (int, float)) else "N/A"
+    return (
+        f"- {label}：{symbol} {name}，现价 {current_text}，涨跌 {pct_text}，"
+        f"日内区间 {range_text}，日内位置 {day_pos_text}，成交额 {amount_text}。"
+    )
+
+
 def default_report_paths(plan: GridPlan) -> tuple[Path, Path]:
     """Return default JSON and Markdown output paths under the project report directory."""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(_BJT).strftime("%Y%m%d_%H%M%S")
     report_dir = project_path("output", "atr_grid_reports")
     base_name = f"{plan.symbol}_atr_grid_{timestamp}"
     return report_dir / f"{base_name}.json", report_dir / f"{base_name}.md"
@@ -182,7 +256,7 @@ def default_report_paths(plan: GridPlan) -> tuple[Path, Path]:
 
 def default_csv_report_path(plan: GridPlan) -> Path:
     """Return the default CSV output path under the project report directory."""
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now(_BJT).strftime("%Y%m%d_%H%M%S")
     report_dir = project_path("output", "atr_grid_reports")
     base_name = f"{plan.symbol}_atr_grid_{timestamp}"
     return report_dir / f"{base_name}.csv"
@@ -280,6 +354,12 @@ def _fmt(value: float | None, precision: int) -> str:
     if value is None:
         return "N/A"
     return f"{value:.{precision}f}"
+
+
+def _fmt_pct(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    return f"{value:+.2f}%"
 
 
 def _fmt_price(value: float | None) -> str:
@@ -413,6 +493,8 @@ def build_notify_content(plan: GridPlan) -> tuple[str, str]:
         "",
         f"**动作**：{plan.headline_action}",
         f"**结论**：{plan.reason}",
+        f"**波动**：{plan.volatility_note}",
+        f"**间距**：{plan.spacing_note}",
         "",
         f"主买点：{buy_text}　主卖点：{sell_text}",
         "",
@@ -467,7 +549,7 @@ def _load_paper_state(symbol: str) -> dict | None:
 
 def render_html(plan: GridPlan, *, paper_state: dict | None = None) -> str:
     """Render a self-contained HTML trading dashboard for *plan*."""
-    now_str = beijing_now_str()
+    now_str = datetime.now(_BJT).strftime("%Y-%m-%d %H:%M")
     snap = plan.snapshot
 
     # Price change vs last close
@@ -493,6 +575,7 @@ def render_html(plan: GridPlan, *, paper_state: dict | None = None) -> str:
 
     # Indicators
     indicators_html = _html_indicators(snap)
+    diagnostics_html = _html_diagnostics(plan)
 
     # Risk boundaries
     risk_html = _html_risk(plan)
@@ -509,6 +592,9 @@ def render_html(plan: GridPlan, *, paper_state: dict | None = None) -> str:
 
     # Paper portfolio section
     paper_html = _html_paper(paper_state, plan) if paper_state else ""
+
+    # Hybrid capital allocation section
+    hybrid_html = _html_hybrid(plan) if getattr(plan, 'hybrid_enabled', False) else ""
 
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
@@ -562,6 +648,8 @@ def render_html(plan: GridPlan, *, paper_state: dict | None = None) -> str:
   </div>
 </div>
 
+{diagnostics_html}
+
 <!-- Sell Ladder -->
 <div class="card">
   <div style="color:#94a3b8;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">
@@ -590,6 +678,7 @@ def render_html(plan: GridPlan, *, paper_state: dict | None = None) -> str:
 </div>
 
 {paper_html}
+{hybrid_html}
 {warnings_html}
 
 <!-- Footer -->
@@ -717,6 +806,30 @@ def _html_indicators(snap) -> str:
     )
 
 
+def _html_diagnostics(plan: GridPlan) -> str:
+    atr_3d = _fmt_pct(plan.atr_change_3d_pct)
+    atr_5d = _fmt_pct(plan.atr_change_5d_pct)
+    prev_step = _fmt_price(plan.previous_step)
+    step = _fmt_price(plan.step)
+    step_change = _fmt_pct(plan.step_change_pct)
+    return f'''<div class="card" style="border-color:#38bdf8aa">
+  <div style="color:#7dd3fc;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">🌊 波动与间距</div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:12px">
+    <div style="background:#0f2537;border-radius:10px;padding:12px">
+      <div style="color:#67e8f9;font-size:12px;margin-bottom:4px">ATR14 变化</div>
+      <div style="color:#e0f2fe;font-size:16px;font-weight:700">3日 {atr_3d} · 5日 {atr_5d}</div>
+    </div>
+    <div style="background:#0f2537;border-radius:10px;padding:12px">
+      <div style="color:#67e8f9;font-size:12px;margin-bottom:4px">网格间距</div>
+      <div style="color:#e0f2fe;font-size:16px;font-weight:700">{prev_step} → {step}</div>
+      <div style="color:#94a3b8;font-size:12px;margin-top:2px">变化 {step_change}</div>
+    </div>
+  </div>
+  <p style="color:#dbeafe;font-size:14px;line-height:1.6;margin-bottom:8px">{plan.volatility_note}</p>
+  <p style="color:#cbd5e1;font-size:14px;line-height:1.6">{plan.spacing_note}</p>
+</div>'''
+
+
 def _html_risk(plan: GridPlan) -> str:
     low = f"¥{plan.lower_invalidation:.3f}" if plan.lower_invalidation else "N/A"
     high = f"¥{plan.upper_breakout:.3f}" if plan.upper_breakout else "N/A"
@@ -767,6 +880,70 @@ def _html_paper(state: dict, plan: GridPlan) -> str:
     <div style="background:#1c2a3a;border-radius:8px;padding:12px 16px;flex:1;min-width:100px">
       <div style="color:#64748b;font-size:11px;margin-bottom:2px">交易次数</div>
       <div style="color:#e2e8f0;font-size:18px;font-weight:700">{trades}</div>
+    </div>
+  </div>
+</div>'''
+
+
+def _html_hybrid(plan: GridPlan) -> str:
+    """Render the Hybrid capital allocation card."""
+    pct = plan.position_pct
+    pct_str = f"{pct:.1f}%" if pct is not None else "N/A"
+    band = plan.position_band or "N/A"
+
+    band_colors = {
+        "low": ("#14532d", "#4ade80"),
+        "mid_low": ("#1e3a5f", "#60a5fa"),
+        "mid_high": ("#431407", "#fb923c"),
+        "high": ("#450a0a", "#f87171"),
+    }
+    bg, fg = band_colors.get(band, ("#1f2937", "#94a3b8"))
+    pct_val = pct if pct is not None else 0
+
+    only_sell_badge = (
+        ' <span style="background:#450a0a;color:#f87171;padding:2px 8px;'
+        'border-radius:4px;font-size:11px;font-weight:700">'
+        '\u26a0 \u53ea\u5356\u4e0d\u4e70</span>'
+    ) if plan.only_sell else ""
+
+    return f'''<div class="card" style="border-color:#8b5cf6aa">
+  <div style="color:#a78bfa;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-bottom:14px">
+    \U0001f4ca Hybrid \u56db\u5c42\u8d44\u91d1\u5206\u914d{only_sell_badge}
+  </div>
+  <div style="margin-bottom:16px">
+    <div style="display:flex;justify-content:space-between;margin-bottom:6px">
+      <span style="color:#64748b;font-size:12px">\u4f4d\u7f6e\u523b\u5ea6</span>
+      <span style="color:{fg};font-size:14px;font-weight:700">{pct_str}
+        <span style="background:{bg};color:{fg};padding:2px 8px;border-radius:8px;font-size:11px;margin-left:6px;border:1px solid {fg}40">{band}</span>
+      </span>
+    </div>
+    <div style="background:#0f172a;border-radius:6px;height:8px;overflow:hidden">
+      <div style="background:{fg};height:100%;width:{pct_val}%;border-radius:6px"></div>
+    </div>
+    <div style="display:flex;justify-content:space-between;margin-top:4px;font-size:10px;color:#475569">
+      <span>0% \u4f4e\u4f4d</span><span>30%</span><span>70%</span><span>85%</span><span>100% \u9ad8\u4f4d</span>
+    </div>
+  </div>
+  <div style="display:flex;gap:12px;flex-wrap:wrap">
+    <div style="background:#1c2a3a;border-radius:8px;padding:12px 16px;flex:1;min-width:100px">
+      <div style="color:#a78bfa;font-size:11px;margin-bottom:2px">\u5e95\u4ed3\u9501\u5b9a (40%)</div>
+      <div style="color:#e2e8f0;font-size:18px;font-weight:700">\u00a5{plan.base_budget:,.0f}</div>
+      <div style="color:#475569;font-size:10px">\u4e0d\u53c2\u4e0e\u7f51\u683c</div>
+    </div>
+    <div style="background:#1c2a3a;border-radius:8px;padding:12px 16px;flex:1;min-width:100px">
+      <div style="color:#60a5fa;font-size:11px;margin-bottom:2px">\u7f51\u683c\u5c42\u9884\u7b97</div>
+      <div style="color:#e2e8f0;font-size:18px;font-weight:700">\u00a5{plan.swing_budget:,.0f}</div>
+      <div style="color:#475569;font-size:10px">\u6309\u4f4d\u7f6e\u7f29\u653e</div>
+    </div>
+    <div style="background:#1c2a3a;border-radius:8px;padding:12px 16px;flex:1;min-width:100px">
+      <div style="color:#f87171;font-size:11px;margin-bottom:2px">\u73b0\u91d1\u5730\u677f (20%)</div>
+      <div style="color:#e2e8f0;font-size:18px;font-weight:700">\u00a5{plan.cash_floor:,.0f}</div>
+      <div style="color:#475569;font-size:10px">\u786c\u4e0b\u9650\u4fdd\u62a4</div>
+    </div>
+    <div style="background:#1c2a3a;border-radius:8px;padding:12px 16px;flex:1;min-width:100px">
+      <div style="color:#94a3b8;font-size:11px;margin-bottom:2px">\u603b\u8d44\u4ea7\u53c2\u8003</div>
+      <div style="color:#e2e8f0;font-size:18px;font-weight:700">\u00a5{plan.total_equity:,.0f}</div>
+      <div style="color:#475569;font-size:10px">\u6301\u4ed3+\u73b0\u91d1</div>
     </div>
   </div>
 </div>'''

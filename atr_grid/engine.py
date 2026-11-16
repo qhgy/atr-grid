@@ -40,6 +40,13 @@ class GridPlan:
     reason: str
     center: float | None
     step: float | None
+    previous_atr14: float | None
+    atr_change_3d_pct: float | None
+    atr_change_5d_pct: float | None
+    previous_step: float | None
+    step_change_pct: float | None
+    volatility_note: str
+    spacing_note: str
     primary_buy: float | None
     primary_sell: float | None
     buy_levels: list[float]
@@ -49,6 +56,17 @@ class GridPlan:
     trim_shares: int
     rebuy_price: float | None
     shares: int
+    # -- hybrid fields (Phase 4) --
+    hybrid_enabled: bool = False
+    position_pct: float | None = None
+    position_band: str = ""
+    base_budget: float = 0.0
+    swing_budget: float = 0.0
+    cash_floor: float = 0.0
+    only_sell: bool = False
+    total_equity: float = 0.0
+    external_context: dict = field(default_factory=dict)
+    market_context: dict = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
 
@@ -68,7 +86,27 @@ class _PlanContext:
     upper_breakout: float
     reference_sell_ladder: list[float]
     reference_rebuy_ladder: list[float]
+    diagnostics: _GridDiagnostics
     cfg: GridConfig
+
+
+@dataclass(slots=True)
+class _StepContext:
+    step: float | None = None
+    atr14: float | None = None
+    band_width: float | None = None
+    driver: str | None = None
+
+
+@dataclass(slots=True)
+class _GridDiagnostics:
+    previous_atr14: float | None = None
+    atr_change_3d_pct: float | None = None
+    atr_change_5d_pct: float | None = None
+    previous_step: float | None = None
+    step_change_pct: float | None = None
+    volatility_note: str = "ATR 历史不足，暂时不判断波动变化。"
+    spacing_note: str = "数据还不够，暂时无法比较今天和上一交易日的网格间距。"
 
 
 def generate_plan(symbol: str, *, shares: int = 200, kline_count: int = 120, cfg: GridConfig = DEFAULT_CONFIG) -> GridPlan:
@@ -82,7 +120,165 @@ def build_plan_from_context(context: MarketContext, cfg: GridConfig = DEFAULT_CO
     frame = build_indicator_frame(context.rows, cfg)
     snapshot = latest_snapshot(frame)
     regime = classify_regime(frame, snapshot, cfg)
-    return _assemble_plan(context, snapshot, regime, cfg)
+    diagnostics = _build_grid_diagnostics(frame, context.price_precision, cfg)
+    plan = _assemble_plan(context, snapshot, regime, cfg, diagnostics=diagnostics)
+    # Hybrid overlay (Phase 4)
+    if cfg.trend_hybrid_enabled:
+        plan = _apply_hybrid_overlay(plan, frame, cfg)
+    if cfg.external_ai_enabled:
+        plan = _apply_external_ai_overlay(plan, cfg)
+    if cfg.market_factors_enabled:
+        plan = _apply_market_factor_overlay(plan, cfg)
+    return plan
+
+
+def _apply_external_ai_overlay(plan: GridPlan, cfg: GridConfig) -> GridPlan:
+    """Attach overnight AI-chain context as a weak advisory filter."""
+    from .external import fetch_external_ai_context
+
+    context = fetch_external_ai_context(cfg)
+    payload = context.to_dict()
+    plan.external_context = payload
+    if context.warning:
+        plan.warnings.append(context.warning)
+
+    if context.status in {"weak", "severe_weak"}:
+        plan.action_steps.append(f"外盘过滤：{context.label}，{context.note}")
+        if plan.rebuy_price is not None:
+            plan.trend_adjustment_note += " 隔夜 AI 链偏弱时，接回只做小仓确认，不做加速补仓。"
+    elif context.status == "strong":
+        plan.action_steps.append(f"外盘过滤：{context.label}，{context.note}")
+    return plan
+
+
+def _apply_market_factor_overlay(plan: GridPlan, cfg: GridConfig) -> GridPlan:
+    """Attach Tencent realtime market factors for intraday judgement."""
+    from core.market_data import get_tencent_quotes
+
+    symbols = (plan.symbol, *cfg.market_factor_symbols)
+    quotes = get_tencent_quotes(symbols)
+    payload = _build_market_factor_payload(plan.symbol, quotes, cfg)
+    plan.market_context = payload
+    if payload.get("warning"):
+        plan.warnings.append(str(payload["warning"]))
+
+    summary = payload.get("summary")
+    if summary:
+        plan.action_steps.append(f"盘中因子：{summary}")
+    return plan
+
+
+def _build_market_factor_payload(symbol: str, quotes: dict, cfg: GridConfig) -> dict:
+    main = quotes.get(symbol)
+    if not main:
+        return {"status": "missing", "warning": "market_factors_missing_main_quote"}
+
+    def quote_dict(sym: str) -> dict:
+        quote = quotes.get(sym)
+        if not quote:
+            return {"symbol": sym, "status": "missing"}
+        day_position = _day_position(quote.current, quote.low, quote.high)
+        return {
+            "symbol": quote.symbol,
+            "name": quote.name,
+            "current": quote.current,
+            "open": quote.open,
+            "high": quote.high,
+            "low": quote.low,
+            "last_close": quote.last_close,
+            "chg": quote.chg,
+            "percent": quote.percent,
+            "volume": quote.volume,
+            "amount": quote.amount,
+            "timestamp": quote.timestamp,
+            "instrument_type": quote.instrument_type,
+            "day_position_pct": round(day_position, 1) if day_position is not None else None,
+        }
+
+    main_payload = quote_dict(symbol)
+    companions = {sym: quote_dict(sym) for sym in cfg.market_factor_symbols}
+    domestic = companions.get(cfg.domestic_semi_symbol, {})
+    domestic_pct = domestic.get("percent")
+    main_pct = main_payload.get("percent")
+    relative = None
+    relative_label = f"{cfg.domestic_semi_symbol} 相对 {symbol}"
+    if isinstance(domestic_pct, (int, float)) and isinstance(main_pct, (int, float)):
+        if symbol == cfg.domestic_semi_symbol:
+            hardware = companions.get(cfg.ai_hardware_symbol, {})
+            hardware_pct = hardware.get("percent")
+            if isinstance(hardware_pct, (int, float)):
+                relative = round(domestic_pct - hardware_pct, 2)
+                relative_label = f"{cfg.domestic_semi_symbol} 相对 {cfg.ai_hardware_symbol}"
+            else:
+                relative = 0.0
+        else:
+            relative = round(domestic_pct - main_pct, 2)
+
+    index_notes: list[str] = []
+    for sym in ("SZ399001", "SZ399006"):
+        pct = companions.get(sym, {}).get("percent")
+        if isinstance(pct, (int, float)):
+            index_notes.append(f"{sym} {pct:+.2f}%")
+
+    summary_parts: list[str] = []
+    main_pos = main_payload.get("day_position_pct")
+    if isinstance(main_pos, (int, float)):
+        summary_parts.append(f"{symbol} 日内位置 {main_pos:.1f}%")
+    if relative is not None:
+        summary_parts.append(f"{relative_label} 强 {relative:+.2f}pct")
+    if index_notes:
+        summary_parts.append("指数 " + " / ".join(index_notes))
+
+    return {
+        "status": "ok",
+        "source": "tencent",
+        "main": main_payload,
+        "companions": companions,
+        "domestic_semi_symbol": cfg.domestic_semi_symbol,
+        "ai_hardware_symbol": cfg.ai_hardware_symbol,
+        "domestic_vs_main_pct": relative,
+        "domestic_relative_label": relative_label,
+        "summary": "；".join(summary_parts),
+    }
+
+
+def _day_position(current: float | None, low: float | None, high: float | None) -> float | None:
+    if current is None or low is None or high is None or high <= low:
+        return None
+    return (current - low) / (high - low) * 100.0
+
+
+def _apply_hybrid_overlay(plan: GridPlan, frame, cfg: GridConfig) -> GridPlan:
+    """Compute hybrid capital allocation and attach to plan."""
+    from .hybrid import position_percentile, compute_capital_allocation
+
+    pct = position_percentile(frame, window=cfg.position_window)
+    # Use a reference total equity based on shares * current_price * 2.5
+    # (rough estimate: position value + cash reserve)
+    total_equity = plan.shares * plan.current_price * 2.5
+    alloc = compute_capital_allocation(total_equity, pct, cfg)
+
+    plan.hybrid_enabled = True
+    plan.position_pct = round(pct, 1) if pct is not None else None
+    plan.position_band = alloc.band.name
+    plan.base_budget = round(alloc.base_budget, 2)
+    plan.swing_budget = round(alloc.swing_budget, 2)
+    plan.cash_floor = round(alloc.cash_floor, 2)
+    plan.only_sell = alloc.only_sell
+    plan.total_equity = round(total_equity, 2)
+
+    # If in high band (only_sell), override headline
+    if alloc.only_sell and plan.mode != "trend_avoid":
+        plan.headline_action = (
+            f"位置刻度 {plan.position_pct}%（{alloc.band.name} 档），"
+            f"当前只卖不买。底仓 ¥{plan.base_budget:,.0f} 不动，"
+            f"网格层预算 ¥{plan.swing_budget:,.0f}。"
+        )
+        plan.strategy_name = "Hybrid 高位止盈（只卖不买）"
+    elif cfg.trend_hybrid_enabled:
+        plan.strategy_name = f"Hybrid {alloc.band.name} 档 · {plan.strategy_name}"
+
+    return plan
 
 
 def _assemble_plan(
@@ -90,19 +286,28 @@ def _assemble_plan(
     snapshot: IndicatorSnapshot,
     regime: RegimeResult,
     cfg: GridConfig = DEFAULT_CONFIG,
+    diagnostics: _GridDiagnostics | None = None,
 ) -> GridPlan:
     """Assemble a GridPlan given precomputed snapshot and regime."""
     warnings = list(context.warnings)
+    diagnostics = diagnostics or _GridDiagnostics()
 
     if snapshot.bb_lower is None or snapshot.bb_middle is None or snapshot.bb_upper is None or snapshot.atr14 is None:
-        return _disabled_plan(context, snapshot, regime, warnings, cfg)
+        return _disabled_plan(context, snapshot, regime, warnings, cfg, diagnostics)
 
     center = quantize_price(snapshot.bb_middle, context.price_precision)
     lower = quantize_price(snapshot.bb_lower, context.price_precision)
     upper = quantize_price(snapshot.bb_upper, context.price_precision)
     if upper <= lower:
         warnings.append("invalid_boll_band")
-        return _disabled_plan(context, snapshot, RegimeResult("disabled", False, "布林带上下沿无效"), warnings, cfg)
+        return _disabled_plan(
+            context,
+            snapshot,
+            RegimeResult("disabled", False, "布林带上下沿无效"),
+            warnings,
+            cfg,
+            diagnostics,
+        )
 
     step = _effective_step(snapshot.atr14, lower, upper, context.price_precision, cfg)
     lower_invalidation = quantize_price(lower - snapshot.atr14, context.price_precision)
@@ -125,6 +330,7 @@ def _assemble_plan(
         upper_breakout=upper_breakout,
         reference_sell_ladder=reference_sell_ladder,
         reference_rebuy_ladder=reference_rebuy_ladder,
+        diagnostics=diagnostics,
         cfg=cfg,
     )
 
@@ -213,6 +419,134 @@ def quantize_price(value: float, precision: int) -> float:
     return float(Decimal(str(value)).quantize(step, rounding=ROUND_HALF_UP))
 
 
+def _build_grid_diagnostics(frame, precision: int, cfg: GridConfig = DEFAULT_CONFIG) -> _GridDiagnostics:
+    """Build plain-language volatility and grid-spacing diagnostics."""
+    if frame.empty:
+        return _GridDiagnostics()
+
+    atr_series = frame["atr14"].dropna()
+    previous_atr14 = float(atr_series.iloc[-2]) if len(atr_series) >= 2 else None
+    atr_change_3d_pct = _series_pct_change(atr_series, 3)
+    atr_change_5d_pct = _series_pct_change(atr_series, 5)
+
+    current_step = _step_context(latest_snapshot(frame), precision, cfg)
+    previous_step = _step_context(latest_snapshot(frame.iloc[:-1]), precision, cfg) if len(frame) >= 2 else _StepContext()
+    step_change_pct = _pct_change_value(current_step.step, previous_step.step)
+
+    return _GridDiagnostics(
+        previous_atr14=previous_atr14,
+        atr_change_3d_pct=atr_change_3d_pct,
+        atr_change_5d_pct=atr_change_5d_pct,
+        previous_step=previous_step.step,
+        step_change_pct=step_change_pct,
+        volatility_note=_build_volatility_note(atr_change_3d_pct, atr_change_5d_pct, cfg),
+        spacing_note=_build_spacing_note(current_step, previous_step, step_change_pct, cfg),
+    )
+
+
+def _series_pct_change(series, periods: int) -> float | None:
+    """Return pct change against *periods* trading days ago."""
+    if len(series) <= periods:
+        return None
+    return _pct_change_value(float(series.iloc[-1]), float(series.iloc[-periods - 1]))
+
+
+def _pct_change_value(current: float | None, previous: float | None) -> float | None:
+    if current is None or previous in (None, 0):
+        return None
+    return round((current - previous) / previous * 100, 2)
+
+
+def _step_context(snapshot: IndicatorSnapshot, precision: int, cfg: GridConfig = DEFAULT_CONFIG) -> _StepContext:
+    if snapshot.atr14 is None or snapshot.bb_lower is None or snapshot.bb_upper is None:
+        return _StepContext()
+
+    lower = quantize_price(snapshot.bb_lower, precision)
+    upper = quantize_price(snapshot.bb_upper, precision)
+    if upper <= lower:
+        return _StepContext(atr14=snapshot.atr14)
+
+    band_width = upper - lower
+    min_step = band_width * cfg.step_min_fraction
+    max_step = band_width * cfg.step_max_fraction
+    if snapshot.atr14 < min_step:
+        driver = "min_band"
+    elif snapshot.atr14 > max_step:
+        driver = "max_band"
+    else:
+        driver = "atr"
+
+    return _StepContext(
+        step=_effective_step(snapshot.atr14, lower, upper, precision, cfg),
+        atr14=snapshot.atr14,
+        band_width=band_width,
+        driver=driver,
+    )
+
+
+def _build_volatility_note(
+    atr_change_3d_pct: float | None,
+    atr_change_5d_pct: float | None,
+    cfg: GridConfig = DEFAULT_CONFIG,
+) -> str:
+    if atr_change_3d_pct is None and atr_change_5d_pct is None:
+        return "ATR 历史不足，暂时不判断波动变化。"
+
+    change_text = f"ATR14 近3日{_fmt_pct_text(atr_change_3d_pct)}，近5日{_fmt_pct_text(atr_change_5d_pct)}。"
+    rises_fast = (
+        (atr_change_3d_pct is not None and atr_change_3d_pct >= cfg.atr_alert_3d_pct)
+        or (atr_change_5d_pct is not None and atr_change_5d_pct >= cfg.atr_alert_5d_pct)
+    )
+    cools_fast = (
+        (atr_change_3d_pct is not None and atr_change_3d_pct <= -cfg.atr_alert_3d_pct)
+        or (atr_change_5d_pct is not None and atr_change_5d_pct <= -cfg.atr_alert_5d_pct)
+    )
+    if rises_fast:
+        return change_text + "波动明显抬升，机动仓要切小、少追单，先防止被急涨急跌来回打乱节奏。"
+    if cools_fast:
+        return change_text + "波动在降温，但不要手动把网格改得过密，仍按系统档位慢慢来。"
+    return change_text + "波动变化不大，按当前计划执行。"
+
+
+def _build_spacing_note(
+    current: _StepContext,
+    previous: _StepContext,
+    step_change_pct: float | None,
+    cfg: GridConfig = DEFAULT_CONFIG,
+) -> str:
+    if current.step is None:
+        return "关键指标还不完整，暂时无法生成可靠网格间距。"
+
+    driver_note = _step_driver_note(current.driver)
+    if previous.step is None or step_change_pct is None:
+        return f"今日网格间距为 ¥{current.step:.3f}。{driver_note}"
+
+    if abs(step_change_pct) < cfg.step_change_alert_pct:
+        return f"网格间距维持在 ¥{current.step:.3f} 附近，较上一交易日变化 {step_change_pct:+.2f}%。{driver_note}"
+
+    direction = "变宽" if step_change_pct > 0 else "变窄"
+    return (
+        f"网格间距从 ¥{previous.step:.3f} 调到 ¥{current.step:.3f}，"
+        f"{direction} {abs(step_change_pct):.2f}%。{driver_note}"
+    )
+
+
+def _step_driver_note(driver: str | None) -> str:
+    if driver == "min_band":
+        return "主要是布林带最小间距在起作用，系统主动防止格子太密。"
+    if driver == "max_band":
+        return "ATR 已经超过布林带允许的最大间距，系统主动封顶，防止格子拉得太散。"
+    if driver == "atr":
+        return "主要跟着 ATR14 走，真实波幅越大，格子越宽。"
+    return "驱动原因暂时无法判断。"
+
+
+def _fmt_pct_text(value: float | None) -> str:
+    if value is None:
+        return "N/A"
+    return f"{value:+.2f}%"
+
+
 def _effective_step(atr14: float, lower: float, upper: float, precision: int, cfg: GridConfig = DEFAULT_CONFIG) -> float:
     band_width = upper - lower
     min_step = band_width * cfg.step_min_fraction
@@ -276,11 +610,19 @@ def _make_plan(
         upper_breakout=None,
         trim_shares=0,
         rebuy_price=None,
+        previous_atr14=None,
+        atr_change_3d_pct=None,
+        atr_change_5d_pct=None,
+        previous_step=None,
+        step_change_pct=None,
+        volatility_note="ATR 历史不足，暂时不判断波动变化。",
+        spacing_note="数据还不够，暂时无法比较今天和上一交易日的网格间距。",
         reference_sell_ladder=[],
         reference_rebuy_ladder=[],
         trend_sell_limit_tranches=0,
         trend_sell_limit_shares=0,
     )
+    defaults.update(asdict(overrides.pop("diagnostics")) if "diagnostics" in overrides else {})
     defaults.update(overrides)
     return GridPlan(**defaults)
 
@@ -291,9 +633,11 @@ def _disabled_plan(
     regime: RegimeResult,
     warnings: list[str],
     cfg: GridConfig = DEFAULT_CONFIG,
+    diagnostics: _GridDiagnostics | None = None,
 ) -> GridPlan:
     return _make_plan(
         context, snapshot, regime, warnings, cfg,
+        diagnostics=diagnostics or _GridDiagnostics(),
         strategy_name="数据不足，先不动作",
         headline_action="关键指标不完整，先不要做交易动作，等数据恢复后再看。",
         action_steps=["先确认数据是否更新到最近交易日。", "若数据恢复，再重新生成计划。"],
@@ -404,6 +748,7 @@ def _build_trend_up_plan(pctx: _PlanContext) -> GridPlan:
 
     return _make_plan(
         ctx, pctx.snapshot, pctx.regime, pctx.warnings, cfg,
+        diagnostics=pctx.diagnostics,
         strategy_name="底仓 + 机动仓锁利润",
         headline_action=headline,
         tactical_shares=trim_shares,
@@ -433,6 +778,7 @@ def _build_trend_down_plan(pctx: _PlanContext) -> GridPlan:
 
     return _make_plan(
         ctx, pctx.snapshot, pctx.regime, pctx.warnings, cfg,
+        diagnostics=pctx.diagnostics,
         strategy_name="下跌趋势先观望",
         headline_action="现在先别硬做网格，不抢反弹，等重新站回震荡区或趋势明显修复。",
         action_steps=_build_trend_avoid_steps(pctx.lower_invalidation),
@@ -476,6 +822,7 @@ def _build_range_plan(pctx: _PlanContext) -> GridPlan:
 
     return _make_plan(
         ctx, pctx.snapshot, pctx.regime, warnings, cfg,
+        diagnostics=pctx.diagnostics,
         strategy_name="高胜率区间网格",
         headline_action=(
             f"只动 {tactical_shares} 股机动仓做区间来回，不碰大部分底仓。"
